@@ -113,6 +113,19 @@ US_TICKERS = {
     "Meta": "META", "Netflix": "NFLX", "JPMorgan": "JPM", "Coca-Cola": "KO"
 }
 
+COMMODITIES_TICKERS = {
+    "Gold": "GC=F",
+    "Silver": "SI=F",
+    "Crude Oil (WTI)": "CL=F",
+    "Brent Crude": "BZ=F",
+    "Natural Gas": "NG=F",
+    "Copper": "HG=F",
+    "Platinum": "PL=F",
+    "Corn": "ZC=F",
+    "Wheat": "ZW=F",
+    "Coffee": "KC=F",
+}
+
 NGX_TICKERS = {
     "Dangote Cement": "DANGCEM.LG", "GTBank": "GTCO.LG", "Zenith Bank": "ZENITHBA.LG",
     "MTN Nigeria": "MTNN.LG", "Access Bank": "ACCESSCO.LG", "Stanbic IBTC": "STANBIC.LG",
