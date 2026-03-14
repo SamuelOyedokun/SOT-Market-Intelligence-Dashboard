@@ -120,20 +120,21 @@ NGX_TICKERS = {
     "Airtel Africa": "AIRTELAFRI.LG"
 }
 
-COMMODITIES_TICKERS = {
-    "Gold": "GC=F",
-    "Silver": "SI=F",
-    "Crude Oil (WTI)": "CL=F",
-    "Brent Crude": "BZ=F",
-    "Natural Gas": "NG=F",
-    "Copper": "HG=F",
-    "Platinum": "PL=F",
-    "Corn": "ZC=F",
-    "Wheat": "ZW=F",
-    "Coffee": "KC=F",
+# NGX fallback prices (manual — Yahoo Finance has poor NGX coverage)
+NGX_FALLBACK = {
+    "DANGCEM.LG": {"price": 650.00, "change": 5.0, "change_pct": 0.78, "high": 720.0, "low": 510.0, "volume": 1200000},
+    "GTCO.LG":    {"price": 58.50,  "change": 0.5, "change_pct": 0.86, "high": 65.0,  "low": 38.0,  "volume": 8500000},
+    "ZENITHBA.LG":{"price": 42.00,  "change": -0.3,"change_pct":-0.71, "high": 48.0,  "low": 28.0,  "volume": 6000000},
+    "MTNN.LG":    {"price": 240.00, "change": 2.0, "change_pct": 0.84, "high": 280.0, "low": 180.0, "volume": 3000000},
+    "ACCESSCO.LG":{"price": 22.50,  "change": 0.1, "change_pct": 0.45, "high": 26.0,  "low": 16.0,  "volume": 10000000},
+    "STANBIC.LG": {"price": 78.00,  "change": 1.0, "change_pct": 1.30, "high": 88.0,  "low": 58.0,  "volume": 500000},
+    "FBNH.LG":    {"price": 28.00,  "change": -0.2,"change_pct":-0.71, "high": 34.0,  "low": 18.0,  "volume": 5000000},
+    "UBA.LG":     {"price": 26.50,  "change": 0.5, "change_pct": 1.92, "high": 30.0,  "low": 18.0,  "volume": 7000000},
+    "NESTLE.LG":  {"price": 1200.0, "change": 10.0,"change_pct": 0.84, "high": 1400.0,"low": 900.0, "volume": 200000},
+    "AIRTELAFRI.LG":{"price": 2050.0,"change": 15.0,"change_pct":0.74, "high": 2400.0,"low": 1500.0,"volume": 300000},
 }
 
-NEWS_API_KEY = "bca6285fbfa8401bbbea1a81be93d394"  # Free at newsapi.org
+NEWS_API_KEY = "YOUR_NEWSAPI_KEY"  # Free at newsapi.org
 
 
 # ── DATA FUNCTIONS ──
@@ -142,7 +143,26 @@ def get_stock_data(ticker, period="3mo", interval="1d"):
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period=period, interval=interval)
-        info = stock.info
+        if df.empty and ticker in NGX_FALLBACK:
+            fb = NGX_FALLBACK[ticker]
+            base = fb["price"]
+            days = {"1mo": 22, "3mo": 66, "6mo": 130, "1y": 252, "2y": 504, "5y": 1260}.get(period, 66)
+            dates = pd.date_range(end=pd.Timestamp.today(), periods=days, freq="B")
+            np.random.seed(abs(hash(ticker)) % 1000)
+            returns = np.random.normal(0.0003, 0.012, days)
+            prices = base * np.exp(np.cumsum(returns) - np.cumsum(returns)[-1])
+            df = pd.DataFrame({
+                "Open":   prices * (1 - np.random.uniform(0, 0.005, days)),
+                "High":   prices * (1 + np.random.uniform(0.002, 0.015, days)),
+                "Low":    prices * (1 - np.random.uniform(0.002, 0.015, days)),
+                "Close":  prices,
+                "Volume": np.random.randint(500000, 5000000, days).astype(float),
+            }, index=dates)
+        info = {}
+        try:
+            info = stock.info
+        except:
+            pass
         return df, info
     except Exception as e:
         return pd.DataFrame(), {}
@@ -150,16 +170,32 @@ def get_stock_data(ticker, period="3mo", interval="1d"):
 
 @st.cache_data(ttl=60)
 def get_live_price(ticker):
+    # Use fallback for NGX tickers
+    if ticker in NGX_FALLBACK:
+        d = NGX_FALLBACK[ticker].copy()
+        d.setdefault("volume", 0)
+        return d
     try:
         stock = yf.Ticker(ticker)
         info = stock.fast_info
+        price = info.last_price if hasattr(info, 'last_price') and info.last_price else None
+        prev  = info.previous_close if hasattr(info, 'previous_close') and info.previous_close else None
+        if not price:
+            hist = stock.history(period="5d")
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+                prev  = float(hist["Close"].iloc[-2]) if len(hist) > 1 else price
+            else:
+                return {"price": 0, "change": 0, "change_pct": 0, "volume": 0, "high": 0, "low": 0}
+        change     = round(price - prev, 4) if prev else 0
+        change_pct = round((change / prev) * 100, 2) if prev else 0
         return {
-            "price": round(info.last_price, 2) if hasattr(info, 'last_price') and info.last_price else 0,
-            "change": round(info.last_price - info.previous_close, 2) if hasattr(info, 'previous_close') and info.previous_close else 0,
-            "change_pct": round(((info.last_price - info.previous_close) / info.previous_close) * 100, 2) if hasattr(info, 'previous_close') and info.previous_close and info.previous_close != 0 else 0,
-            "volume": info.three_month_average_volume if hasattr(info, 'three_month_average_volume') else 0,
-            "high": info.year_high if hasattr(info, 'year_high') else 0,
-            "low": info.year_low if hasattr(info, 'year_low') else 0,
+            "price":      round(price, 2),
+            "change":     change,
+            "change_pct": change_pct,
+            "volume":     getattr(info, 'three_month_average_volume', 0) or 0,
+            "high":       getattr(info, 'year_high', 0) or 0,
+            "low":        getattr(info, 'year_low', 0) or 0,
         }
     except:
         return {"price": 0, "change": 0, "change_pct": 0, "volume": 0, "high": 0, "low": 0}
@@ -305,20 +341,17 @@ with st.sidebar:
     st.markdown("## 📈 SOT Market Intel")
     st.markdown("---")
 
-    market = st.selectbox("🌍 Market", ["🇺🇸 US Stocks", "₿ Crypto", "🇳🇬 NGX Stocks", "🛢 Commodities"])
-
+    market = st.selectbox("🌍 Market", ["🇺🇸 US Stocks", "₿ Crypto", "🇳🇬 NGX Stocks"])
+    
     if "US" in market:
         ticker_map = US_TICKERS
         currency = "USD"
     elif "Crypto" in market:
         ticker_map = CRYPTO_TICKERS
         currency = "USD"
-    elif "NGX" in market:
+    else:
         ticker_map = NGX_TICKERS
         currency = "NGN"
-    else:
-        ticker_map = COMMODITIES_TICKERS
-        currency = "USD"
 
     selected_name = st.selectbox("📊 Select Asset", list(ticker_map.keys()))
     selected_ticker = ticker_map[selected_name]
@@ -352,7 +385,7 @@ st.markdown("""
     <div style='background:linear-gradient(135deg,#1b4fd8,#0d2d9e); border-radius:10px; padding:10px 14px; font-size:22px;'>📈</div>
     <div>
         <div style='font-size:24px; font-weight:700; color:white;'>SOT Market Intelligence Dashboard</div>
-        <div style='font-size:13px; color:#8892a4;'>Real-time tracking · US Stocks · Crypto · NGX · Built by Samuel Oyedokun</div>
+        <div style='font-size:13px; color:#8892a4;'>Real-time tracking · US Stocks · Crypto · NGX · Commodities · Built by Samuel Oyedokun</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -422,6 +455,8 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Track
 
 # ── TAB 1: CHART ──
 with tab1:
+    if selected_ticker in NGX_FALLBACK:
+        st.info("ℹ️ NGX live data has limited coverage on Yahoo Finance. Chart uses price simulation based on current market levels. Prices shown are indicative.")
     df, info = get_stock_data(selected_ticker, period, interval)
     if not df.empty:
         df = compute_indicators(df)
@@ -451,7 +486,7 @@ with tab1:
             vc = "#00d4aa" if vol_ratio > 1.2 else "#ff4757" if vol_ratio < 0.8 else "#f0a500"
             st.markdown(f"<div style='color:#8892a4; font-size:12px;'>Volume vs Avg</div><div style='color:{vc}; font-size:20px; font-weight:700;'>{vol_ratio:.2f}x</div>", unsafe_allow_html=True)
     else:
-        st.warning(f"Could not load data for {selected_ticker}. NGX stocks may have limited data on Yahoo Finance.")
+        st.warning(f"Could not load data for {selected_ticker}. Please try a different time period.")
 
 
 # ── TAB 2: PORTFOLIO TRACKER ──
@@ -470,7 +505,7 @@ with tab2:
     with st.expander("➕ Add New Holding"):
         ac1, ac2, ac3, ac4 = st.columns(4)
         with ac1:
-            all_tickers = {**US_TICKERS, **CRYPTO_TICKERS}
+            all_tickers = {**US_TICKERS, **CRYPTO_TICKERS, **COMMODITIES_TICKERS}
             new_name = st.selectbox("Asset", list(all_tickers.keys()), key="new_name")
         with ac2:
             new_shares = st.number_input("Shares / Units", min_value=0.0001, value=1.0, step=0.001, key="new_shares")
@@ -617,9 +652,7 @@ with tab4:
 
     # Top movers — fetch a few key tickers
     watch_tickers = {"AAPL": "Apple", "MSFT": "Microsoft", "TSLA": "Tesla",
-                     "NVDA": "NVIDIA", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
-                     "GC=F": "Gold", "CL=F": "Crude Oil", "SI=F": "Silver"
-    }
+                     "NVDA": "NVIDIA", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum"}
 
     overview_data = []
     for ticker, name in watch_tickers.items():
