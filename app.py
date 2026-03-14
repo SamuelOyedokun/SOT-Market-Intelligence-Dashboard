@@ -6,6 +6,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import yfinance as yf
 import requests
+import json
 from datetime import datetime, timedelta
 import time
 # ── GROQ AI CONFIG (Free) ──
@@ -202,7 +203,12 @@ COMMODITIES_TICKERS = {
 # NGX tickers — symbols map to NGX stock codes (not Yahoo Finance)
 NGX_TICKERS = {name: symbol for name, symbol in NGX_SYMBOLS.items()}
 
-NEWS_API_KEY = "YOUR_NEWSAPI_KEY"  # Free at newsapi.org
+# ── NEWS API KEY (from Streamlit secrets) ──
+try:
+    NEWS_API_KEY = st.secrets.get("NEWS_API_KEY", "")
+except:
+    import os
+    NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 
 
 # ── DATA FUNCTIONS ──
@@ -271,46 +277,165 @@ def get_live_price(ticker):
         return {"price": 0, "change": 0, "change_pct": 0, "volume": 0, "high": 0, "low": 0}
 
 
-def get_news_sentiment(query):
-    """Fetch news and compute basic sentiment"""
+# ── RSS FEED SOURCES ──
+RSS_FEEDS = {
+    "Reuters Business":    "https://feeds.reuters.com/reuters/businessNews",
+    "BBC Business":        "http://feeds.bbci.co.uk/news/business/rss.xml",
+    "MarketWatch":         "https://feeds.marketwatch.com/marketwatch/topstories",
+    "Yahoo Finance":       "https://finance.yahoo.com/news/rssindex",
+    "Nairametrics":        "https://nairametrics.com/feed/",
+    "BusinessDay Nigeria": "https://businessday.ng/feed/",
+}
+
+def _keyword_sentiment(text):
+    """Fast keyword-based sentiment scoring"""
+    pos = ["surge","rally","gain","rise","bull","profit","growth","beat","high",
+           "strong","up","positive","record","breakthrough","upgrade","buy"]
+    neg = ["crash","fall","drop","bear","loss","down","decline","miss","risk",
+           "weak","negative","cut","downgrade","sell","concern","warning","slump"]
+    t   = text.lower()
+    ps  = sum(1 for w in pos if w in t)
+    ns  = sum(1 for w in neg if w in t)
+    if ps > ns:   return "Positive"
+    elif ns > ps: return "Negative"
+    return "Neutral"
+
+def _ai_sentiment_batch(articles, groq_key):
+    """Use Groq AI to score sentiment for a batch of headlines"""
+    if not groq_key or not articles:
+        return None
     try:
-        url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&pageSize=10&apiKey={NEWS_API_KEY}"
-        r = requests.get(url, timeout=5)
-        if r.status_code == 200:
-            articles = r.json().get("articles", [])
-            results = []
-            for a in articles[:8]:
-                title = a.get("title", "")
-                # Simple keyword sentiment
-                pos_words = ["surge", "rally", "gain", "rise", "bull", "up", "profit", "growth", "high", "beat"]
-                neg_words = ["crash", "fall", "drop", "bear", "loss", "down", "decline", "low", "miss", "risk"]
-                title_lower = title.lower()
-                pos_score = sum(1 for w in pos_words if w in title_lower)
-                neg_score = sum(1 for w in neg_words if w in title_lower)
-                if pos_score > neg_score:
-                    sentiment = "Positive"
-                elif neg_score > pos_score:
-                    sentiment = "Negative"
-                else:
-                    sentiment = "Neutral"
-                results.append({
-                    "title": title,
-                    "source": a.get("source", {}).get("name", ""),
-                    "url": a.get("url", ""),
-                    "published": a.get("publishedAt", "")[:10],
-                    "sentiment": sentiment
-                })
-            return results
+        headlines = "\n".join([f"{i+1}. {a['title']}" for i, a in enumerate(articles)])
+        prompt = f"""Score the financial market sentiment of each headline as Positive, Negative, or Neutral.
+Return ONLY a JSON array of strings in the same order, e.g. ["Positive","Negative","Neutral"].
+No explanation, no markdown, just the JSON array.
+
+Headlines:
+{headlines}"""
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 200, "temperature": 0,
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=15
+        )
+        raw  = r.json()["choices"][0]["message"]["content"].strip()
+        raw  = raw.replace("```json","").replace("```","").strip()
+        scores = json.loads(raw)
+        if isinstance(scores, list) and len(scores) == len(articles):
+            return scores
     except:
         pass
-    # Fallback mock news
-    return [
-        {"title": f"{query} shows strong momentum in today's trading session", "source": "Reuters", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Positive"},
-        {"title": f"Analysts upgrade {query} amid improving market conditions", "source": "Bloomberg", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Positive"},
-        {"title": f"Market volatility affects {query} trading volumes", "source": "CNBC", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral"},
-        {"title": f"{query} faces headwinds from global macro uncertainty", "source": "FT", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Negative"},
-        {"title": f"Investors watch {query} closely as earnings season approaches", "source": "WSJ", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral"},
-    ]
+    return None
+
+def _fetch_rss(feed_url, query, max_items=5):
+    """Fetch and filter RSS feed articles matching query"""
+    results = []
+    try:
+        hdrs = {"User-Agent": "Mozilla/5.0 (compatible; SOTDashboard/1.0)"}
+        r    = requests.get(feed_url, headers=hdrs, timeout=8)
+        if r.status_code != 200:
+            return []
+        from xml.etree import ElementTree as ET
+        root  = ET.fromstring(r.content)
+        items = root.findall(".//item")
+        query_terms = query.lower().split()
+        for item in items:
+            title   = (item.findtext("title")       or "").strip()
+            link    = (item.findtext("link")         or "#").strip()
+            pubdate = (item.findtext("pubDate")      or "").strip()
+            desc    = (item.findtext("description")  or "").strip()
+            combined = (title + " " + desc).lower()
+            # Include if any query term matches
+            if any(term in combined for term in query_terms):
+                # Parse date
+                try:
+                    from email.utils import parsedate_to_datetime
+                    pub = parsedate_to_datetime(pubdate).strftime("%Y-%m-%d")
+                except:
+                    pub = datetime.now().strftime("%Y-%m-%d")
+                results.append({
+                    "title":     title,
+                    "url":       link,
+                    "published": pub,
+                    "source":    "",   # filled by caller
+                    "sentiment": "",   # filled later
+                    "desc":      desc[:200],
+                })
+                if len(results) >= max_items:
+                    break
+    except:
+        pass
+    return results
+
+@st.cache_data(ttl=600)  # Cache 10 minutes
+def get_news_sentiment(query, groq_key=""):
+    """
+    Multi-source news + AI sentiment:
+    1. NewsAPI (if key available)
+    2. RSS feeds (Reuters, BBC, MarketWatch, Yahoo Finance, Nairametrics, BusinessDay)
+    3. AI sentiment scoring via Groq
+    4. Keyword fallback if AI unavailable
+    """
+    articles = []
+
+    # Source 1: NewsAPI
+    if NEWS_API_KEY:
+        try:
+            url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&pageSize=10&language=en&apiKey={NEWS_API_KEY}"
+            r   = requests.get(url, timeout=8)
+            if r.status_code == 200:
+                for a in r.json().get("articles", [])[:8]:
+                    title = (a.get("title") or "").strip()
+                    if not title or title == "[Removed]":
+                        continue
+                    articles.append({
+                        "title":     title,
+                        "url":       a.get("url", "#"),
+                        "published": (a.get("publishedAt") or "")[:10],
+                        "source":    a.get("source", {}).get("name", "NewsAPI"),
+                        "sentiment": "",
+                        "desc":      (a.get("description") or "")[:200],
+                    })
+        except:
+            pass
+
+    # Source 2: RSS feeds
+    for feed_name, feed_url in RSS_FEEDS.items():
+        rss_items = _fetch_rss(feed_url, query, max_items=3)
+        for item in rss_items:
+            item["source"] = feed_name
+            articles.append(item)
+        if len(articles) >= 15:
+            break
+
+    # Deduplicate by title similarity
+    seen   = set()
+    unique = []
+    for a in articles:
+        key = a["title"][:60].lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(a)
+    articles = unique[:12]
+
+    if not articles:
+        # Final fallback — clearly labeled as demo
+        return [
+            {"title": f"{query}: No live news available — configure NewsAPI key for real articles", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
+        ]
+
+    # Score sentiment — try AI first, fall back to keywords
+    ai_scores = _ai_sentiment_batch(articles, groq_key) if groq_key else None
+    for i, article in enumerate(articles):
+        if ai_scores and i < len(ai_scores) and ai_scores[i] in ("Positive","Negative","Neutral"):
+            article["sentiment"] = ai_scores[i]
+            article["scored_by"] = "AI"
+        else:
+            article["sentiment"] = _keyword_sentiment(article["title"] + " " + article.get("desc",""))
+            article["scored_by"] = "Keywords"
+
+    return articles
 
 
 def compute_indicators(df):
@@ -960,54 +1085,156 @@ with tab2:
 with tab3:
     st.markdown(f"<div class='section-header'>📰 News & Sentiment — {selected_name}</div>", unsafe_allow_html=True)
 
-    news = get_news_sentiment(selected_name)
+    # Fetch news with Groq AI scoring
+    try:
+        _groq_key = st.secrets.get("GROQ_API_KEY", "")
+    except:
+        _groq_key = ""
 
-    # Sentiment summary
+    with st.spinner("🔍 Fetching news from multiple sources..."):
+        news = get_news_sentiment(selected_name, _groq_key)
+
+    # Data sources info
+    sources_used = list(set(a["source"] for a in news if a.get("source")))
+    ai_scored    = sum(1 for a in news if a.get("scored_by") == "AI")
+    st.markdown(f"""
+    <div style='background:#141928; border:1px solid #2a3350; border-radius:8px;
+         padding:10px 16px; margin-bottom:16px; font-size:12px; color:#8892a4;'>
+        📡 <strong style='color:white;'>Sources:</strong> {", ".join(sources_used) if sources_used else "Demo"} &nbsp;·&nbsp;
+        🤖 <strong style='color:white;'>{ai_scored}/{len(news)}</strong> articles scored by AI &nbsp;·&nbsp;
+        📰 <strong style='color:white;'>{len(news)}</strong> articles collected
+    </div>""", unsafe_allow_html=True)
+
+    # Sentiment counts
     sentiments = [n["sentiment"] for n in news]
-    pos_count = sentiments.count("Positive")
-    neg_count = sentiments.count("Negative")
-    neu_count = sentiments.count("Neutral")
-    total = len(sentiments) or 1
-    overall = "Bullish 🟢" if pos_count > neg_count else "Bearish 🔴" if neg_count > pos_count else "Neutral 🟡"
+    pos_count  = sentiments.count("Positive")
+    neg_count  = sentiments.count("Negative")
+    neu_count  = sentiments.count("Neutral")
+    total      = len(sentiments) or 1
+    bull_pct   = round(pos_count / total * 100)
+    bear_pct   = round(neg_count / total * 100)
 
-    nc1, nc2, nc3, nc4 = st.columns(4)
+    if pos_count > neg_count:   overall, overall_color = "Bullish 🟢", "#00d4aa"
+    elif neg_count > pos_count: overall, overall_color = "Bearish 🔴", "#ff4757"
+    else:                       overall, overall_color = "Neutral 🟡", "#f0a500"
+
+    nc1, nc2, nc3, nc4, nc5 = st.columns(5)
     with nc1:
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>Overall Sentiment</div><div style='font-size:18px; font-weight:700; color:white;'>{overall}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Overall Sentiment</div><div style='font-size:17px; font-weight:700; color:{overall_color};'>{overall}</div></div>", unsafe_allow_html=True)
     with nc2:
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>Positive</div><div class='metric-value' style='color:#00d4aa;'>{pos_count}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>🟢 Positive</div><div class='metric-value' style='color:#00d4aa;'>{pos_count}</div><div style='color:#8892a4; font-size:11px;'>{bull_pct}% of articles</div></div>", unsafe_allow_html=True)
     with nc3:
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>Negative</div><div class='metric-value' style='color:#ff4757;'>{neg_count}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>🔴 Negative</div><div class='metric-value' style='color:#ff4757;'>{neg_count}</div><div style='color:#8892a4; font-size:11px;'>{bear_pct}% of articles</div></div>", unsafe_allow_html=True)
     with nc4:
-        st.markdown(f"<div class='metric-card'><div class='metric-label'>Neutral</div><div class='metric-value' style='color:#f0a500;'>{neu_count}</div></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>🟡 Neutral</div><div class='metric-value' style='color:#f0a500;'>{neu_count}</div><div style='color:#8892a4; font-size:11px;'>{100-bull_pct-bear_pct}% of articles</div></div>", unsafe_allow_html=True)
+    with nc5:
+        score = round((pos_count - neg_count) / total * 100)
+        sc    = "#00d4aa" if score > 0 else "#ff4757" if score < 0 else "#f0a500"
+        st.markdown(f"<div class='metric-card'><div class='metric-label'>Sentiment Score</div><div class='metric-value' style='color:{sc};'>{score:+d}</div><div style='color:#8892a4; font-size:11px;'>-100 (bearish) to +100 (bullish)</div></div>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Sentiment bar
-    fig_sent = go.Figure(go.Bar(
-        x=["Positive", "Neutral", "Negative"],
-        y=[pos_count, neu_count, neg_count],
-        marker_color=["#00d4aa", "#f0a500", "#ff4757"],
-        text=[pos_count, neu_count, neg_count],
-        textposition="auto"
-    ))
-    fig_sent.update_layout(
-        paper_bgcolor="#0a0e1a", plot_bgcolor="#0d1220",
-        font=dict(color="white"), height=200,
-        margin=dict(t=20, b=20), showlegend=False,
-        title=dict(text="Sentiment Distribution", font=dict(color="white", size=14))
-    )
-    fig_sent.update_xaxes(gridcolor="#1a2035")
-    fig_sent.update_yaxes(gridcolor="#1a2035")
-    st.plotly_chart(fig_sent, use_container_width=True)
+    # Charts side by side
+    chart_n1, chart_n2 = st.columns(2)
+    with chart_n1:
+        fig_sent = go.Figure(go.Bar(
+            x=["Positive", "Neutral", "Negative"],
+            y=[pos_count, neu_count, neg_count],
+            marker_color=["#00d4aa", "#f0a500", "#ff4757"],
+            text=[f"{v} articles" for v in [pos_count, neu_count, neg_count]],
+            textposition="auto"
+        ))
+        fig_sent.update_layout(
+            paper_bgcolor="#0a0e1a", plot_bgcolor="#0d1220",
+            font=dict(color="white"), height=240,
+            margin=dict(t=30, b=20), showlegend=False,
+            title=dict(text="Sentiment Distribution", font=dict(color="white", size=13))
+        )
+        fig_sent.update_xaxes(gridcolor="#1a2035")
+        fig_sent.update_yaxes(gridcolor="#1a2035")
+        st.plotly_chart(fig_sent, use_container_width=True)
 
-    # News articles
-    for article in news:
-        s = article["sentiment"]
-        sc = "sentiment-pos" if s == "Positive" else "sentiment-neg" if s == "Negative" else "sentiment-neu"
+    with chart_n2:
+        src_counts = {}
+        for a in news:
+            s = a.get("source","Unknown")
+            src_counts[s] = src_counts.get(s,0) + 1
+        fig_src = go.Figure(go.Bar(
+            x=list(src_counts.keys()),
+            y=list(src_counts.values()),
+            marker_color="#1b4fd8",
+            text=list(src_counts.values()),
+            textposition="auto"
+        ))
+        fig_src.update_layout(
+            paper_bgcolor="#0a0e1a", plot_bgcolor="#0d1220",
+            font=dict(color="white"), height=240,
+            margin=dict(t=30, b=20), showlegend=False,
+            title=dict(text="Articles by Source", font=dict(color="white", size=13))
+        )
+        fig_src.update_xaxes(gridcolor="#1a2035", tickangle=-30)
+        fig_src.update_yaxes(gridcolor="#1a2035")
+        st.plotly_chart(fig_src, use_container_width=True)
+
+    # Filter bar
+    st.markdown("<div class='section-header'>📋 Articles</div>", unsafe_allow_html=True)
+    filter_cols = st.columns(3)
+    with filter_cols[0]:
+        filter_sent = st.selectbox("Filter by Sentiment", ["All", "Positive", "Negative", "Neutral"], key="news_filter_sent")
+    with filter_cols[1]:
+        all_sources = ["All"] + list(set(a["source"] for a in news if a.get("source")))
+        filter_src  = st.selectbox("Filter by Source", all_sources, key="news_filter_src")
+    with filter_cols[2]:
+        sort_order = st.selectbox("Sort by", ["Latest First", "Oldest First", "Most Positive First", "Most Negative First"], key="news_sort")
+
+    # Apply filters
+    filtered_news = [a for a in news
+        if (filter_sent == "All" or a["sentiment"] == filter_sent)
+        and (filter_src == "All" or a["source"] == filter_src)]
+
+    # Apply sort
+    if sort_order == "Oldest First":
+        filtered_news = sorted(filtered_news, key=lambda x: x["published"])
+    elif sort_order == "Most Positive First":
+        order = {"Positive": 0, "Neutral": 1, "Negative": 2}
+        filtered_news = sorted(filtered_news, key=lambda x: order.get(x["sentiment"], 1))
+    elif sort_order == "Most Negative First":
+        order = {"Negative": 0, "Neutral": 1, "Positive": 2}
+        filtered_news = sorted(filtered_news, key=lambda x: order.get(x["sentiment"], 1))
+
+    st.markdown(f"<small style='color:#8892a4;'>Showing {len(filtered_news)} of {len(news)} articles</small>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Article cards
+    for article in filtered_news:
+        s     = article["sentiment"]
+        sc    = "sentiment-pos" if s == "Positive" else "sentiment-neg" if s == "Negative" else "sentiment-neu"
+        bdr   = "#00d4aa" if s == "Positive" else "#ff4757" if s == "Negative" else "#f0a500"
+        badge = "🟢" if s == "Positive" else "🔴" if s == "Negative" else "🟡"
+        ai_badge = "<span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:10px; padding:2px 7px; font-size:10px; color:#1b4fd8; margin-left:6px;'>🤖 AI</span>" if article.get("scored_by") == "AI" else ""
+        url   = article.get("url","#")
+        link  = f"<a href='{url}' target='_blank' style='color:#1b4fd8; font-size:11px; text-decoration:none;'>Read full article →</a>" if url != "#" else ""
+        desc  = article.get("desc","")
+        desc_html = f"<div style='color:#8892a4; font-size:12px; margin-top:6px; line-height:1.5;'>{desc}</div>" if desc else ""
+
         st.markdown(f"""
-        <div class='news-card'>
-            <div class='news-title'>{article['title']}</div>
-            <div class='news-meta'>{article['source']} · {article['published']} · <span class='{sc}'>{s}</span></div>
+        <div style='background:#141928; border:1px solid #2a3350; border-left:3px solid {bdr};
+             border-radius:10px; padding:16px; margin:8px 0;'>
+            <div style='display:flex; justify-content:space-between; align-items:flex-start;'>
+                <div style='flex:1;'>
+                    <div style='color:#e0e6f0; font-size:14px; font-weight:500; line-height:1.5;'>{article['title']}</div>
+                    {desc_html}
+                    <div style='margin-top:8px;'>
+                        <span style='color:#8892a4; font-size:11px;'>{article['source']} · {article['published']}</span>
+                        &nbsp;&nbsp;{link}
+                    </div>
+                </div>
+                <div style='margin-left:16px; text-align:center; min-width:80px;'>
+                    <div style='font-size:20px;'>{badge}</div>
+                    <div class='{sc}' style='font-size:11px; font-weight:600;'>{s}</div>
+                    {ai_badge}
+                </div>
+            </div>
         </div>""", unsafe_allow_html=True)
 
 
