@@ -15,6 +15,68 @@ except:
     import os
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+# ── EMAIL ALERT FUNCTION ──
+def send_email_alert(to_email, subject, asset_name, ticker, alert_type, alert_price, current_price, sender_email, sender_password):
+    """Send price alert email via Gmail SMTP"""
+    try:
+        direction = "risen ABOVE" if alert_type == "high" else "fallen BELOW"
+        arrow     = "🔴" if alert_type == "high" else "🟢"
+        color     = "#ff4757" if alert_type == "high" else "#00d4aa"
+        action    = "Consider reviewing your position." if alert_type == "high" else "This may be a buying opportunity."
+
+        html = f"""
+        <div style="font-family:Arial,sans-serif; max-width:600px; margin:0 auto; background:#0a0e1a; padding:32px; border-radius:12px;">
+            <div style="text-align:center; margin-bottom:24px;">
+                <div style="font-size:40px;">{arrow}</div>
+                <h1 style="color:white; font-size:22px; margin:8px 0;">Price Alert Triggered</h1>
+                <p style="color:#8892a4; font-size:14px; margin:0;">SOT Market Intelligence Dashboard</p>
+            </div>
+            <div style="background:#141928; border:1px solid #2a3350; border-radius:10px; padding:24px; margin-bottom:20px;">
+                <h2 style="color:white; font-size:18px; margin:0 0 16px 0;">{asset_name} ({ticker})</h2>
+                <p style="color:#8892a4; font-size:14px; margin:0 0 8px 0;">The price has <strong style="color:{color};">{direction}</strong> your alert level.</p>
+                <table style="width:100%; border-collapse:collapse; margin-top:16px;">
+                    <tr>
+                        <td style="color:#8892a4; font-size:13px; padding:8px 0;">Your Alert Level</td>
+                        <td style="color:white; font-size:16px; font-weight:700; text-align:right;">${alert_price:,.2f}</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#8892a4; font-size:13px; padding:8px 0;">Current Price</td>
+                        <td style="color:{color}; font-size:20px; font-weight:700; text-align:right;">${current_price:,.2f}</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#8892a4; font-size:13px; padding:8px 0;">Difference</td>
+                        <td style="color:{color}; font-size:14px; font-weight:600; text-align:right;">${abs(current_price - alert_price):,.2f} ({abs((current_price - alert_price)/alert_price*100):.2f}%)</td>
+                    </tr>
+                </table>
+            </div>
+            <p style="color:#8892a4; font-size:13px; text-align:center;">{action}</p>
+            <p style="color:#555; font-size:11px; text-align:center; margin-top:24px; border-top:1px solid #2a3350; padding-top:16px;">
+                This alert was sent by SOT Market Intelligence Dashboard.<br>
+                ⚠️ For informational purposes only. Not financial advice.<br>
+                Alert triggered at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} WAT
+            </p>
+        </div>
+        """
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"{arrow} {subject}"
+        msg["From"]    = sender_email
+        msg["To"]      = to_email
+        msg.attach(MIMEText(html, "html"))
+
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, to_email, msg.as_string())
+        return True, "Email sent successfully"
+    except smtplib.SMTPAuthenticationError:
+        return False, "Gmail authentication failed. Use an App Password, not your regular password."
+    except Exception as e:
+        return False, str(e)
+
 from ngx_data import (
     fetch_ngx_prices, get_ngx_stock, get_ngx_history,
     get_market_status, NGX_SYMBOLS, NGX_LAST_KNOWN, is_market_open
@@ -379,8 +441,45 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("**🔔 Price Alerts**")
-    alert_high = st.number_input("Alert if price ABOVE", min_value=0.0, value=0.0, step=0.01)
-    alert_low = st.number_input("Alert if price BELOW", min_value=0.0, value=0.0, step=0.01)
+
+    # Initialise alerts state
+    if "alerts" not in st.session_state:
+        st.session_state.alerts = []  # [{name, ticker, type, level, email, active, triggered}]
+    if "alert_email_sender" not in st.session_state:
+        st.session_state.alert_email_sender = ""
+    if "alert_email_password" not in st.session_state:
+        st.session_state.alert_email_password = ""
+
+    # Quick alert setup
+    alert_high = st.number_input("🔴 Alert ABOVE", min_value=0.0, value=0.0, step=0.01, key="alert_high_input")
+    alert_low  = st.number_input("🟢 Alert BELOW", min_value=0.0, value=0.0, step=0.01, key="alert_low_input")
+    alert_email_quick = st.text_input("📧 Alert Email", placeholder="your@email.com", key="alert_email_quick")
+
+    if st.button("➕ Set Alert", use_container_width=True, key="set_alert_btn"):
+        if not alert_email_quick:
+            st.error("Enter your email first")
+        elif alert_high <= 0 and alert_low <= 0:
+            st.error("Set at least one price level")
+        else:
+            if alert_high > 0:
+                st.session_state.alerts.append({
+                    "id": len(st.session_state.alerts),
+                    "name": selected_name, "ticker": selected_ticker,
+                    "type": "high", "level": alert_high,
+                    "email": alert_email_quick, "active": True, "triggered": False
+                })
+            if alert_low > 0:
+                st.session_state.alerts.append({
+                    "id": len(st.session_state.alerts),
+                    "name": selected_name, "ticker": selected_ticker,
+                    "type": "low", "level": alert_low,
+                    "email": alert_email_quick, "active": True, "triggered": False
+                })
+            st.success(f"Alert set for {selected_name}!")
+
+    # Keep backward compat
+    alert_high = st.session_state.get("alert_high_input", 0.0)
+    alert_low  = st.session_state.get("alert_low_input",  0.0)
 
     st.markdown("---")
     # Show NGX market status in sidebar
@@ -460,16 +559,57 @@ with col5:
         <div style='color:#8892a4; font-size:13px;'>From Year Low</div>
     </div>""", unsafe_allow_html=True)
 
-# ── PRICE ALERTS ──
-if alert_high > 0 and price > alert_high:
-    st.markdown(f"<div class='alert-card-high'>🔴 ALERT: {selected_name} is ABOVE your target of {alert_high:,.2f} — Current: {price:,.2f}</div>", unsafe_allow_html=True)
-if alert_low > 0 and price < alert_low and price > 0:
-    st.markdown(f"<div class='alert-card-low'>🟢 ALERT: {selected_name} is BELOW your target of {alert_low:,.2f} — Current: {price:,.2f}</div>", unsafe_allow_html=True)
+# ── LIVE ALERT CHECKER (auto-runs every page refresh) ──
+def check_and_fire_alerts(alerts, sender_email, sender_password):
+    fired = []
+    for alert in alerts:
+        if not alert.get("active") or alert.get("triggered"):
+            continue
+        live = get_live_price(alert["ticker"])
+        cp   = live.get("price", 0)
+        if cp <= 0:
+            continue
+        triggered = (alert["type"] == "high" and cp > alert["level"]) or                     (alert["type"] == "low"  and cp < alert["level"])
+        if triggered:
+            alert["triggered"] = True
+            alert["active"]    = False
+            fired.append((alert, cp))
+            if sender_email and sender_password:
+                direction = "risen above" if alert["type"] == "high" else "fallen below"
+                send_email_alert(
+                    to_email       = alert["email"],
+                    subject        = f"{alert['name']} has {direction} ${alert['level']:,.2f}",
+                    asset_name     = alert["name"],
+                    ticker         = alert["ticker"],
+                    alert_type     = alert["type"],
+                    alert_price    = alert["level"],
+                    current_price  = cp,
+                    sender_email   = sender_email,
+                    sender_password= sender_password,
+                )
+    return fired
+
+# Auto-check all active alerts on every page load
+if "alerts" in st.session_state and st.session_state.alerts:
+    try:
+        _sender_email = st.secrets.get("ALERT_SENDER_EMAIL", "")
+        _sender_pass  = st.secrets.get("ALERT_SENDER_PASSWORD", "")
+    except:
+        _sender_email = ""
+        _sender_pass  = ""
+
+    _fired = check_and_fire_alerts(
+        st.session_state.alerts, _sender_email, _sender_pass
+    )
+    for _alert, _cp in _fired:
+        _arrow = "🔴" if _alert["type"] == "high" else "🟢"
+        _dir   = "ABOVE" if _alert["type"] == "high" else "BELOW"
+        st.markdown(f"<div class='alert-card-{'high' if _alert['type']=='high' else 'low'}'>{_arrow} ALERT TRIGGERED: <strong>{_alert['name']}</strong> is {_dir} ${_alert['level']:,.2f} — Current: ${_cp:,.2f} {'📧 Email sent!' if _sender_email else '(Add ALERT_SENDER_EMAIL to secrets to enable emails)'}</div>", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS ──
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview", "🤖 AI Market Insights"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview", "🤖 AI Market Insights", "🔔 Price Alerts"])
 
 # ── TAB 1: CHART ──
 with tab1:
@@ -1162,6 +1302,159 @@ Note: This is for informational purposes only, not financial advice.""",
                 st.error(f"AI analysis failed: {str(e)}. Please check your connection and try again.")
 
 
+
+# ── TAB 6: PRICE ALERTS ──
+with tab6:
+    st.markdown("<div class='section-header'>🔔 Price Alert Manager</div>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Set price alerts · Receive instant email notifications when triggered</small>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if "alerts" not in st.session_state:
+        st.session_state.alerts = []
+
+    # ── EMAIL SENDER CONFIG ──
+    with st.expander("⚙️ Email Configuration (Required for email alerts)", expanded=len(st.session_state.alerts) == 0):
+        st.markdown("<small style='color:#8892a4;'>Use a Gmail account to send alerts. You must use a Gmail App Password, not your regular password.</small>", unsafe_allow_html=True)
+        ec1, ec2 = st.columns(2)
+        with ec1:
+            sender_email_input = st.text_input("📧 Sender Gmail Address", placeholder="yourgmail@gmail.com", key="sender_email_cfg")
+        with ec2:
+            sender_pass_input  = st.text_input("🔑 Gmail App Password", type="password", placeholder="xxxx xxxx xxxx xxxx", key="sender_pass_cfg")
+
+        st.markdown("""
+        <div style='background:#141928; border:1px solid #2a3350; border-radius:8px; padding:12px; margin-top:8px;'>
+            <div style='color:#f0a500; font-size:13px; font-weight:600; margin-bottom:6px;'>📋 How to get a Gmail App Password:</div>
+            <div style='color:#8892a4; font-size:12px; line-height:1.8;'>
+                1. Go to <strong style='color:white;'>myaccount.google.com</strong><br>
+                2. Click <strong style='color:white;'>Security</strong> → <strong style='color:white;'>2-Step Verification</strong> (must be ON)<br>
+                3. Scroll down → click <strong style='color:white;'>App Passwords</strong><br>
+                4. Select app: <strong style='color:white;'>Mail</strong> → Generate<br>
+                5. Copy the 16-character password → paste above
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("💾 Save Email Config", use_container_width=True, key="save_email_cfg"):
+            if sender_email_input and sender_pass_input:
+                st.session_state.alert_email_sender   = sender_email_input
+                st.session_state.alert_email_password = sender_pass_input
+                st.success("✅ Email config saved for this session!")
+            else:
+                st.error("Fill in both email and app password.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── ADD NEW ALERT ──
+    st.markdown("<div class='section-header'>➕ Create New Alert</div>", unsafe_allow_html=True)
+    na1, na2, na3, na4, na5 = st.columns(5)
+    all_assets_for_alert = {**US_TICKERS, **CRYPTO_TICKERS, **COMMODITIES_TICKERS, **{n: s for n, s in NGX_SYMBOLS.items()}}
+
+    with na1:
+        alert_asset   = st.selectbox("Asset", list(all_assets_for_alert.keys()), key="alert_asset_sel")
+    with na2:
+        alert_dir     = st.selectbox("Condition", ["🔴 Price rises ABOVE", "🟢 Price falls BELOW"], key="alert_dir_sel")
+    with na3:
+        alert_asset_ticker = all_assets_for_alert[alert_asset]
+        alert_live_price   = get_live_price(alert_asset_ticker).get("price", 0)
+        st.markdown(f"<div style='padding:4px 0;'><span style='color:#8892a4; font-size:11px;'>LIVE PRICE</span><br><span style='color:#1b4fd8; font-size:16px; font-weight:700;'>${alert_live_price:,.2f}</span></div>", unsafe_allow_html=True)
+        alert_level   = st.number_input("Target Price", min_value=0.0, value=float(round(alert_live_price * 1.05, 2)) if alert_live_price else 0.0, step=0.01, key="alert_level_inp")
+    with na4:
+        alert_to_email = st.text_input("Send alert to", placeholder="recipient@email.com", key="alert_to_email_inp")
+    with na5:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔔 Create Alert", use_container_width=True, key="create_alert_btn"):
+            if not alert_to_email:
+                st.error("Enter recipient email")
+            elif alert_level <= 0:
+                st.error("Enter a valid price level")
+            else:
+                atype = "high" if "ABOVE" in alert_dir else "low"
+                st.session_state.alerts.append({
+                    "id":        len(st.session_state.alerts) + 1,
+                    "name":      alert_asset,
+                    "ticker":    alert_asset_ticker,
+                    "type":      atype,
+                    "level":     alert_level,
+                    "email":     alert_to_email,
+                    "active":    True,
+                    "triggered": False,
+                    "created":   datetime.now().strftime("%Y-%m-%d %H:%M"),
+                })
+                st.success(f"✅ Alert created: {alert_asset} {'above' if atype=='high' else 'below'} ${alert_level:,.2f} → {alert_to_email}")
+                st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── MANUAL CHECK + ACTIVE ALERTS TABLE ──
+    active_alerts  = [a for a in st.session_state.alerts if a.get("active")]
+    fired_alerts   = [a for a in st.session_state.alerts if a.get("triggered")]
+
+    col_check, col_clear = st.columns([1, 1])
+    with col_check:
+        if st.button("🔍 Check All Alerts Now", use_container_width=True, key="manual_check"):
+            sender_e = st.session_state.get("alert_email_sender", "")
+            sender_p = st.session_state.get("alert_email_password", "")
+            fired = check_and_fire_alerts(st.session_state.alerts, sender_e, sender_p)
+            if fired:
+                for alert, cp in fired:
+                    arrow = "🔴" if alert["type"] == "high" else "🟢"
+                    direct = "ABOVE" if alert["type"] == "high" else "BELOW"
+                    st.success(f"{arrow} TRIGGERED: {alert['name']} is {direct} ${alert['level']:,.2f} — Current: ${cp:,.2f}")
+                    if sender_e:
+                        st.info(f"📧 Email sent to {alert['email']}")
+                    else:
+                        st.warning("⚠️ Email not sent — configure Gmail above to enable email alerts")
+                st.rerun()
+            else:
+                st.info(f"✅ Checked {len(active_alerts)} alert(s) — none triggered yet.")
+    with col_clear:
+        if st.button("🗑️ Clear All Alerts", use_container_width=True, key="clear_all_alerts"):
+            st.session_state.alerts = []
+            st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Active alerts table
+    if active_alerts:
+        st.markdown(f"<div class='section-header'>🟡 Active Alerts ({len(active_alerts)})</div>", unsafe_allow_html=True)
+        for i, alert in enumerate(st.session_state.alerts):
+            if not alert.get("active"): continue
+            live_now  = get_live_price(alert["ticker"]).get("price", 0)
+            arrow     = "🔴" if alert["type"] == "high" else "🟢"
+            condition = "rises ABOVE" if alert["type"] == "high" else "falls BELOW"
+            dist      = live_now - alert["level"] if alert["type"] == "high" else alert["level"] - live_now
+            dist_pct  = (dist / alert["level"] * 100) if alert["level"] > 0 else 0
+            dist_color = "#00d4aa" if dist < 0 else "#f0a500"
+            ac1, ac2, ac3, ac4, ac5, ac6 = st.columns([2,1,1,1,2,1])
+            with ac1: st.markdown(f"<div style='color:white; font-weight:600; font-size:14px;'>{alert['name']}</div><div style='color:#8892a4; font-size:11px;'>{alert['ticker']}</div>", unsafe_allow_html=True)
+            with ac2: st.markdown(f"<div style='color:#8892a4; font-size:11px;'>CONDITION</div><div style='color:white; font-size:13px;'>{arrow} {condition}</div>", unsafe_allow_html=True)
+            with ac3: st.markdown(f"<div style='color:#8892a4; font-size:11px;'>TARGET</div><div style='color:white; font-size:14px; font-weight:600;'>${alert['level']:,.2f}</div>", unsafe_allow_html=True)
+            with ac4: st.markdown(f"<div style='color:#8892a4; font-size:11px;'>LIVE PRICE</div><div style='color:#1b4fd8; font-size:14px; font-weight:600;'>${live_now:,.2f}</div>", unsafe_allow_html=True)
+            with ac5: st.markdown(f"<div style='color:#8892a4; font-size:11px;'>DISTANCE</div><div style='color:{dist_color}; font-size:13px; font-weight:600;'>${abs(dist):,.2f} ({abs(dist_pct):.1f}%) away</div><div style='color:#8892a4; font-size:11px;'>{alert['email']}</div>", unsafe_allow_html=True)
+            with ac6:
+                if st.button("❌", key=f"del_alert_{i}_{alert['id']}"):
+                    st.session_state.alerts[i]["active"] = False
+                    st.rerun()
+            st.markdown("<hr style='border-color:#2a3350; margin:8px 0;'>", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style='background:#141928; border:1px solid #2a3350; border-radius:10px; padding:30px; text-align:center;'>
+            <div style='font-size:28px;'>🔔</div>
+            <div style='color:white; font-weight:600; margin:8px 0;'>No Active Alerts</div>
+            <div style='color:#8892a4; font-size:13px;'>Create an alert above to get notified when prices move.</div>
+        </div>""", unsafe_allow_html=True)
+
+    # Triggered history
+    if fired_alerts:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(f"<div class='section-header'>✅ Triggered Alerts ({len(fired_alerts)})</div>", unsafe_allow_html=True)
+        df_fired = pd.DataFrame([{
+            "Asset": a["name"], "Ticker": a["ticker"],
+            "Type": "🔴 Above" if a["type"]=="high" else "🟢 Below",
+            "Target": f"${a['level']:,.2f}", "Email": a["email"],
+            "Created": a.get("created",""),
+        } for a in fired_alerts])
+        st.dataframe(df_fired, use_container_width=True, hide_index=True)
 
 # ── FOOTER ──
 st.markdown("<br>", unsafe_allow_html=True)
