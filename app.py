@@ -515,104 +515,305 @@ with tab1:
 
 # ── TAB 2: PORTFOLIO TRACKER ──
 with tab2:
-    st.markdown("<div class='section-header'>💼 Portfolio Tracker</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color:#8892a4;'>Add your holdings to track performance and total value</small>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>💼 Portfolio Simulator</div>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Simulate buy/sell trades with virtual money · Track real P&L with live prices · All markets supported</small>", unsafe_allow_html=True)
 
+    # ── INITIALISE SESSION STATE ──
     if "portfolio" not in st.session_state:
-        st.session_state.portfolio = [
-            {"name": "Apple", "ticker": "AAPL", "shares": 10, "avg_cost": 150.0},
-            {"name": "Bitcoin", "ticker": "BTC-USD", "shares": 0.1, "avg_cost": 40000.0},
-            {"name": "NVIDIA", "ticker": "NVDA", "shares": 5, "avg_cost": 450.0},
-        ]
+        st.session_state.portfolio = []   # [{name, ticker, shares, avg_cost, market}]
+    if "trade_history" not in st.session_state:
+        st.session_state.trade_history = []  # [{date, action, name, ticker, shares, price, total}]
+    if "cash_balance" not in st.session_state:
+        st.session_state.cash_balance = 10000.0  # Starting virtual cash
 
-    # Add new holding
-    with st.expander("➕ Add New Holding"):
-        ac1, ac2, ac3, ac4 = st.columns(4)
-        with ac1:
-            all_tickers = {**US_TICKERS, **CRYPTO_TICKERS, **COMMODITIES_TICKERS}
-            new_name = st.selectbox("Asset", list(all_tickers.keys()), key="new_name")
-        with ac2:
-            new_shares = st.number_input("Shares / Units", min_value=0.0001, value=1.0, step=0.001, key="new_shares")
-        with ac3:
-            new_cost = st.number_input("Avg Cost Price ($)", min_value=0.01, value=100.0, step=0.01, key="new_cost")
-        with ac4:
-            st.markdown("<br>", unsafe_allow_html=True)
-            if st.button("Add to Portfolio", use_container_width=True):
-                st.session_state.portfolio.append({
-                    "name": new_name,
-                    "ticker": all_tickers[new_name],
-                    "shares": new_shares,
-                    "avg_cost": new_cost
+    all_tickers_map = {**US_TICKERS, **CRYPTO_TICKERS, **COMMODITIES_TICKERS, **{n: s for n, s in NGX_SYMBOLS.items()}}
+
+    # ── CASH BALANCE BAR ──
+    total_invested = sum(
+        get_live_price(h["ticker"]).get("price", 0) * h["shares"]
+        for h in st.session_state.portfolio
+    )
+    total_account = st.session_state.cash_balance + total_invested
+
+    cb1, cb2, cb3, cb4 = st.columns(4)
+    with cb1:
+        st.markdown(f"""<div class='metric-card'>
+            <div class='metric-label'>💵 Cash Balance</div>
+            <div class='metric-value' style='font-size:22px;'>${st.session_state.cash_balance:,.2f}</div>
+            <div style='color:#8892a4; font-size:12px;'>Available to invest</div>
+        </div>""", unsafe_allow_html=True)
+    with cb2:
+        st.markdown(f"""<div class='metric-card'>
+            <div class='metric-label'>📊 Invested Value</div>
+            <div class='metric-value' style='font-size:22px;'>${total_invested:,.2f}</div>
+            <div style='color:#8892a4; font-size:12px;'>Live market value</div>
+        </div>""", unsafe_allow_html=True)
+    with cb3:
+        st.markdown(f"""<div class='metric-card'>
+            <div class='metric-label'>🏦 Total Account</div>
+            <div class='metric-value' style='font-size:22px;'>${total_account:,.2f}</div>
+            <div style='color:#8892a4; font-size:12px;'>Cash + Investments</div>
+        </div>""", unsafe_allow_html=True)
+    with cb4:
+        overall_pnl = total_account - 10000.0
+        oc = "#00d4aa" if overall_pnl >= 0 else "#ff4757"
+        overall_pct = (overall_pnl / 10000.0) * 100
+        st.markdown(f"""<div class='metric-card'>
+            <div class='metric-label'>📈 Total Return</div>
+            <div class='metric-value' style='font-size:22px; color:{oc};'>{overall_pct:+.2f}%</div>
+            <div style='color:{oc}; font-size:12px; font-weight:600;'>${overall_pnl:+,.2f} from $10,000</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── BUY / SELL PANEL ──
+    trade_tab1, trade_tab2, trade_tab3 = st.tabs(["🟢 Buy", "🔴 Sell", "📋 Trade History"])
+
+    with trade_tab1:
+        st.markdown("#### 🟢 Place a Buy Order")
+        b1, b2, b3, b4 = st.columns(4)
+        with b1:
+            buy_name = st.selectbox("Asset", list(all_tickers_map.keys()), key="buy_name")
+        with b2:
+            buy_ticker = all_tickers_map[buy_name]
+            buy_live   = get_live_price(buy_ticker)
+            buy_price  = buy_live.get("price", 0)
+            st.markdown(f"<div style='padding:8px 0;'><span style='color:#8892a4; font-size:12px;'>LIVE PRICE</span><br><span style='color:#00d4aa; font-size:20px; font-weight:700;'>${buy_price:,.2f}</span></div>", unsafe_allow_html=True)
+        with b3:
+            buy_shares = st.number_input("Qty / Units", min_value=0.0001, value=1.0, step=0.001, key="buy_shares")
+        with b4:
+            buy_total  = buy_price * buy_shares
+            st.markdown(f"<div style='padding:8px 0;'><span style='color:#8892a4; font-size:12px;'>ORDER TOTAL</span><br><span style='color:white; font-size:20px; font-weight:700;'>${buy_total:,.2f}</span></div>", unsafe_allow_html=True)
+
+        if st.button("✅ Execute Buy Order", use_container_width=True, key="exec_buy"):
+            if buy_price <= 0:
+                st.error("Cannot fetch live price. Try again.")
+            elif buy_total > st.session_state.cash_balance:
+                st.error(f"Insufficient cash. You need ${buy_total:,.2f} but have ${st.session_state.cash_balance:,.2f}")
+            else:
+                # Deduct cash
+                st.session_state.cash_balance -= buy_total
+                # Update or add holding
+                existing = next((h for h in st.session_state.portfolio if h["ticker"] == buy_ticker), None)
+                if existing:
+                    total_shares = existing["shares"] + buy_shares
+                    existing["avg_cost"] = ((existing["avg_cost"] * existing["shares"]) + buy_total) / total_shares
+                    existing["shares"]   = total_shares
+                else:
+                    st.session_state.portfolio.append({
+                        "name": buy_name, "ticker": buy_ticker,
+                        "shares": buy_shares, "avg_cost": buy_price,
+                    })
+                # Log trade
+                st.session_state.trade_history.append({
+                    "Date":   datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "Action": "🟢 BUY",
+                    "Asset":  buy_name,
+                    "Ticker": buy_ticker,
+                    "Qty":    buy_shares,
+                    "Price":  buy_price,
+                    "Total":  buy_total,
                 })
-                st.success(f"Added {new_name}!")
+                st.success(f"✅ Bought {buy_shares:.4f} × {buy_name} @ ${buy_price:,.2f} | Total: ${buy_total:,.2f}")
                 st.rerun()
 
-    # Portfolio table
-    portfolio_data = []
-    total_value = 0
-    total_cost = 0
+    with trade_tab2:
+        st.markdown("#### 🔴 Place a Sell Order")
+        if not st.session_state.portfolio:
+            st.info("No holdings to sell. Buy something first.")
+        else:
+            s1, s2, s3, s4 = st.columns(4)
+            holding_names = [h["name"] for h in st.session_state.portfolio]
+            with s1:
+                sell_name    = st.selectbox("Holding", holding_names, key="sell_name")
+            holding_data     = next(h for h in st.session_state.portfolio if h["name"] == sell_name)
+            sell_ticker      = holding_data["ticker"]
+            sell_live        = get_live_price(sell_ticker)
+            sell_price       = sell_live.get("price", 0)
+            with s2:
+                st.markdown(f"<div style='padding:8px 0;'><span style='color:#8892a4; font-size:12px;'>LIVE PRICE</span><br><span style='color:#ff4757; font-size:20px; font-weight:700;'>${sell_price:,.2f}</span></div>", unsafe_allow_html=True)
+            with s3:
+                sell_qty = st.number_input("Qty to Sell", min_value=0.0001,
+                    max_value=float(holding_data["shares"]),
+                    value=float(holding_data["shares"]), step=0.001, key="sell_qty")
+            with s4:
+                sell_total = sell_price * sell_qty
+                sell_pnl   = (sell_price - holding_data["avg_cost"]) * sell_qty
+                pnl_color  = "#00d4aa" if sell_pnl >= 0 else "#ff4757"
+                st.markdown(f"<div style='padding:8px 0;'><span style='color:#8892a4; font-size:12px;'>PROCEEDS · P&L</span><br><span style='color:white; font-size:16px; font-weight:700;'>${sell_total:,.2f}</span><span style='color:{pnl_color}; font-size:14px; font-weight:600; margin-left:8px;'>{sell_pnl:+,.2f}</span></div>", unsafe_allow_html=True)
 
-    for holding in st.session_state.portfolio:
-        live_data = get_live_price(holding["ticker"])
-        current_price = live_data["price"]
-        market_value = current_price * holding["shares"]
-        cost_basis = holding["avg_cost"] * holding["shares"]
-        pnl = market_value - cost_basis
-        pnl_pct = (pnl / cost_basis * 100) if cost_basis > 0 else 0
-        total_value += market_value
-        total_cost += cost_basis
-        portfolio_data.append({
-            "Asset": holding["name"],
-            "Ticker": holding["ticker"],
-            "Shares": holding["shares"],
-            "Avg Cost": f"${holding['avg_cost']:,.2f}",
-            "Current Price": f"${current_price:,.2f}",
-            "Market Value": f"${market_value:,.2f}",
-            "P&L": f"${pnl:+,.2f}",
-            "P&L %": f"{pnl_pct:+.2f}%",
-            "Return": pnl_pct
-        })
+            # Show holding info
+            st.markdown(f"<small style='color:#8892a4;'>You hold {holding_data['shares']:.4f} units · Avg cost: ${holding_data['avg_cost']:,.2f}</small>", unsafe_allow_html=True)
 
-    if portfolio_data:
-        # Summary metrics
-        total_pnl = total_value - total_cost
+            if st.button("✅ Execute Sell Order", use_container_width=True, key="exec_sell"):
+                if sell_price <= 0:
+                    st.error("Cannot fetch live price. Try again.")
+                elif sell_qty > holding_data["shares"]:
+                    st.error("Cannot sell more than you hold.")
+                else:
+                    st.session_state.cash_balance += sell_total
+                    holding_data["shares"] -= sell_qty
+                    if holding_data["shares"] < 0.0001:
+                        st.session_state.portfolio = [h for h in st.session_state.portfolio if h["ticker"] != sell_ticker]
+                    st.session_state.trade_history.append({
+                        "Date":   datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "Action": "🔴 SELL",
+                        "Asset":  sell_name,
+                        "Ticker": sell_ticker,
+                        "Qty":    sell_qty,
+                        "Price":  sell_price,
+                        "Total":  sell_total,
+                    })
+                    arrow = "▲" if sell_pnl >= 0 else "▼"
+                    st.success(f"✅ Sold {sell_qty:.4f} × {sell_name} @ ${sell_price:,.2f} | P&L: {arrow} ${abs(sell_pnl):,.2f}")
+                    st.rerun()
+
+    with trade_tab3:
+        st.markdown("#### 📋 Trade History")
+        if not st.session_state.trade_history:
+            st.info("No trades yet. Place a buy or sell order to get started.")
+        else:
+            df_hist = pd.DataFrame(st.session_state.trade_history)
+            df_hist["Price"] = df_hist["Price"].apply(lambda x: f"${x:,.2f}")
+            df_hist["Total"] = df_hist["Total"].apply(lambda x: f"${x:,.2f}")
+            df_hist["Qty"]   = df_hist["Qty"].apply(lambda x: f"{x:.4f}")
+            st.dataframe(df_hist, use_container_width=True, hide_index=True)
+            if st.button("🗑️ Clear Trade History", key="clear_hist"):
+                st.session_state.trade_history = []
+                st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── HOLDINGS TABLE ──
+    if st.session_state.portfolio:
+        st.markdown("<div class='section-header'>📊 Current Holdings</div>", unsafe_allow_html=True)
+
+        portfolio_data = []
+        total_value    = 0
+        total_cost     = 0
+
+        for holding in st.session_state.portfolio:
+            live_data     = get_live_price(holding["ticker"])
+            current_price = live_data["price"]
+            market_value  = current_price * holding["shares"]
+            cost_basis    = holding["avg_cost"] * holding["shares"]
+            pnl           = market_value - cost_basis
+            pnl_pct       = (pnl / cost_basis * 100) if cost_basis > 0 else 0
+            weight        = 0  # will calculate after
+            total_value  += market_value
+            total_cost   += cost_basis
+            portfolio_data.append({
+                "Asset":         holding["name"],
+                "Ticker":        holding["ticker"],
+                "Qty":           holding["shares"],
+                "Avg Cost":      f"${holding['avg_cost']:,.2f}",
+                "Live Price":    f"${current_price:,.2f}",
+                "Market Value":  market_value,
+                "P&L ($)":       pnl,
+                "P&L (%)":       pnl_pct,
+            })
+
+        total_pnl     = total_value - total_cost
         total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0
-        pc1, pc2, pc3, pc4 = st.columns(4)
         tc = "#00d4aa" if total_pnl >= 0 else "#ff4757"
-        with pc1:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Total Value</div><div class='metric-value'>${total_value:,.2f}</div></div>", unsafe_allow_html=True)
-        with pc2:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Total Cost</div><div class='metric-value'>${total_cost:,.2f}</div></div>", unsafe_allow_html=True)
-        with pc3:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Total P&L</div><div class='metric-value' style='color:{tc};'>${total_pnl:+,.2f}</div></div>", unsafe_allow_html=True)
-        with pc4:
-            st.markdown(f"<div class='metric-card'><div class='metric-label'>Total Return</div><div class='metric-value' style='color:{tc};'>{total_pnl_pct:+.2f}%</div></div>", unsafe_allow_html=True)
+
+        # Summary row
+        ph1, ph2, ph3, ph4 = st.columns(4)
+        with ph1:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Portfolio Value</div><div class='metric-value'>${total_value:,.2f}</div></div>", unsafe_allow_html=True)
+        with ph2:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Total Invested</div><div class='metric-value'>${total_cost:,.2f}</div></div>", unsafe_allow_html=True)
+        with ph3:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Unrealised P&L</div><div class='metric-value' style='color:{tc};'>${total_pnl:+,.2f}</div></div>", unsafe_allow_html=True)
+        with ph4:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Portfolio Return</div><div class='metric-value' style='color:{tc};'>{total_pnl_pct:+.2f}%</div></div>", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
-        df_portfolio = pd.DataFrame(portfolio_data)
 
-        # Color P&L column
+        # Format table
+        df_port = pd.DataFrame(portfolio_data)
+        df_port["Weight"] = df_port["Market Value"].apply(lambda x: f"{(x/total_value*100):.1f}%" if total_value > 0 else "0%")
+        df_port["P&L ($)"] = df_port["P&L ($)"].apply(lambda x: f"${x:+,.2f}")
+        df_port["P&L (%)"] = df_port["P&L (%)"].apply(lambda x: f"{x:+.2f}%")
+        df_port["Market Value"] = df_port["Market Value"].apply(lambda x: f"${x:,.2f}")
+        df_port["Qty"] = df_port["Qty"].apply(lambda x: f"{x:.4f}")
+
         def color_pnl(val):
-            if isinstance(val, str) and "%" in val:
-                num = float(val.replace("%", "").replace("+", ""))
-                color = "#00d4aa" if num >= 0 else "#ff4757"
-                return f"color: {color}; font-weight: 600"
+            if isinstance(val, str) and ("+" in val or (val.startswith("-") and any(c.isdigit() for c in val))):
+                try:
+                    num = float(val.replace("$","").replace("%","").replace("+","").replace(",",""))
+                    color = "#00d4aa" if num >= 0 else "#ff4757"
+                    return f"color: {color}; font-weight: 600"
+                except: pass
             return ""
 
         st.dataframe(
-            df_portfolio.drop(columns=["Return"]).style.applymap(color_pnl, subset=["P&L %", "P&L"]),
+            df_port.style.applymap(color_pnl, subset=["P&L ($)", "P&L (%)"]),
             use_container_width=True, hide_index=True
         )
 
-        # Pie chart
-        fig_pie = px.pie(
-            df_portfolio, values=[float(v.replace("$","").replace(",","")) for v in df_portfolio["Market Value"]],
-            names="Asset", title="Portfolio Allocation",
-            color_discrete_sequence=["#1b4fd8","#00d4aa","#f0a500","#ff4757","#a855f7","#06b6d4"]
-        )
-        fig_pie.update_layout(paper_bgcolor="#0a0e1a", plot_bgcolor="#0a0e1a",
-            font=dict(color="white"), title_font=dict(color="white"), height=350)
-        st.plotly_chart(fig_pie, use_container_width=True)
+        # ── CHARTS ──
+        st.markdown("<br>", unsafe_allow_html=True)
+        chart_c1, chart_c2 = st.columns(2)
+
+        raw_values = [float(h["shares"] * get_live_price(h["ticker"]).get("price", 0)) for h in st.session_state.portfolio]
+        raw_names  = [h["name"] for h in st.session_state.portfolio]
+
+        with chart_c1:
+            fig_pie = px.pie(
+                values=raw_values, names=raw_names,
+                title="Portfolio Allocation",
+                color_discrete_sequence=["#1b4fd8","#00d4aa","#f0a500","#ff4757","#a855f7","#06b6d4","#ec4899","#14b8a6"]
+            )
+            fig_pie.update_traces(textinfo="label+percent", hole=0.4)
+            fig_pie.update_layout(
+                paper_bgcolor="#0a0e1a", plot_bgcolor="#0a0e1a",
+                font=dict(color="white"), title_font=dict(color="white"),
+                height=350, showlegend=False,
+                annotations=[dict(text="Portfolio", x=0.5, y=0.5, font_size=13, showarrow=False, font_color="white")]
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        with chart_c2:
+            pnl_vals  = [float(h["shares"] * get_live_price(h["ticker"]).get("price",0)) - float(h["shares"] * h["avg_cost"]) for h in st.session_state.portfolio]
+            pnl_names = [h["name"] for h in st.session_state.portfolio]
+            pnl_colors = ["#00d4aa" if v >= 0 else "#ff4757" for v in pnl_vals]
+            fig_pnl = go.Figure(go.Bar(
+                x=pnl_names, y=pnl_vals,
+                marker_color=pnl_colors,
+                text=[f"${v:+,.0f}" for v in pnl_vals],
+                textposition="auto"
+            ))
+            fig_pnl.update_layout(
+                title="P&L by Holding",
+                paper_bgcolor="#0a0e1a", plot_bgcolor="#0d1220",
+                font=dict(color="white"), title_font=dict(color="white"),
+                height=350, showlegend=False,
+                margin=dict(t=40, b=20)
+            )
+            fig_pnl.add_hline(y=0, line_dash="dot", line_color="#2a3350")
+            fig_pnl.update_xaxes(gridcolor="#1a2035")
+            fig_pnl.update_yaxes(gridcolor="#1a2035")
+            st.plotly_chart(fig_pnl, use_container_width=True)
+
+        # ── RESET BUTTON ──
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔄 Reset Portfolio (Start Fresh with $10,000)", key="reset_portfolio"):
+            st.session_state.portfolio     = []
+            st.session_state.trade_history = []
+            st.session_state.cash_balance  = 10000.0
+            st.success("Portfolio reset! Starting fresh with $10,000.")
+            st.rerun()
+
+    else:
+        st.markdown("""
+        <div style='background:#141928; border:1px solid #2a3350; border-radius:12px;
+             padding:40px; text-align:center; margin:20px 0;'>
+            <div style='font-size:36px; margin-bottom:12px;'>💼</div>
+            <div style='font-size:18px; font-weight:600; color:white; margin-bottom:8px;'>No Holdings Yet</div>
+            <div style='color:#8892a4; font-size:14px;'>Use the 🟢 Buy tab above to simulate your first investment.</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 
 # ── TAB 3: NEWS & SENTIMENT ──
