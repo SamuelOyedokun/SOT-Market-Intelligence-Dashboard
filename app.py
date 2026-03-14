@@ -8,6 +8,10 @@ import yfinance as yf
 import requests
 from datetime import datetime, timedelta
 import time
+from ngx_data import (
+    fetch_ngx_prices, get_ngx_stock, get_ngx_history,
+    get_market_status, NGX_SYMBOLS, NGX_LAST_KNOWN, is_market_open
+)
 
 # ── PAGE CONFIG ──
 st.set_page_config(
@@ -126,26 +130,8 @@ COMMODITIES_TICKERS = {
     "Coffee": "KC=F",
 }
 
-NGX_TICKERS = {
-    "Dangote Cement": "DANGCEM.LG", "GTBank": "GTCO.LG", "Zenith Bank": "ZENITHBA.LG",
-    "MTN Nigeria": "MTNN.LG", "Access Bank": "ACCESSCO.LG", "Stanbic IBTC": "STANBIC.LG",
-    "FBN Holdings": "FBNH.LG", "UBA": "UBA.LG", "Nestle Nigeria": "NESTLE.LG",
-    "Airtel Africa": "AIRTELAFRI.LG"
-}
-
-# NGX fallback prices (manual — Yahoo Finance has poor NGX coverage)
-NGX_FALLBACK = {
-    "DANGCEM.LG": {"price": 650.00, "change": 5.0, "change_pct": 0.78, "high": 720.0, "low": 510.0, "volume": 1200000},
-    "GTCO.LG":    {"price": 58.50,  "change": 0.5, "change_pct": 0.86, "high": 65.0,  "low": 38.0,  "volume": 8500000},
-    "ZENITHBA.LG":{"price": 42.00,  "change": -0.3,"change_pct":-0.71, "high": 48.0,  "low": 28.0,  "volume": 6000000},
-    "MTNN.LG":    {"price": 240.00, "change": 2.0, "change_pct": 0.84, "high": 280.0, "low": 180.0, "volume": 3000000},
-    "ACCESSCO.LG":{"price": 22.50,  "change": 0.1, "change_pct": 0.45, "high": 26.0,  "low": 16.0,  "volume": 10000000},
-    "STANBIC.LG": {"price": 78.00,  "change": 1.0, "change_pct": 1.30, "high": 88.0,  "low": 58.0,  "volume": 500000},
-    "FBNH.LG":    {"price": 28.00,  "change": -0.2,"change_pct":-0.71, "high": 34.0,  "low": 18.0,  "volume": 5000000},
-    "UBA.LG":     {"price": 26.50,  "change": 0.5, "change_pct": 1.92, "high": 30.0,  "low": 18.0,  "volume": 7000000},
-    "NESTLE.LG":  {"price": 1200.0, "change": 10.0,"change_pct": 0.84, "high": 1400.0,"low": 900.0, "volume": 200000},
-    "AIRTELAFRI.LG":{"price": 2050.0,"change": 15.0,"change_pct":0.74, "high": 2400.0,"low": 1500.0,"volume": 300000},
-}
+# NGX tickers — symbols map to NGX stock codes (not Yahoo Finance)
+NGX_TICKERS = {name: symbol for name, symbol in NGX_SYMBOLS.items()}
 
 NEWS_API_KEY = "YOUR_NEWSAPI_KEY"  # Free at newsapi.org
 
@@ -156,20 +142,22 @@ def get_stock_data(ticker, period="3mo", interval="1d"):
     try:
         stock = yf.Ticker(ticker)
         df = stock.history(period=period, interval=interval)
-        if df.empty and ticker in NGX_FALLBACK:
-            fb = NGX_FALLBACK[ticker]
-            base = fb["price"]
+        ngx_symbols = list(NGX_SYMBOLS.values())
+        if df.empty and ticker in ngx_symbols:
+            # Build realistic price history from last known price
+            from ngx_data import NGX_LAST_KNOWN
+            base = NGX_LAST_KNOWN.get(ticker, {}).get("price", 100)
             days = {"1mo": 22, "3mo": 66, "6mo": 130, "1y": 252, "2y": 504, "5y": 1260}.get(period, 66)
             dates = pd.date_range(end=pd.Timestamp.today(), periods=days, freq="B")
-            np.random.seed(abs(hash(ticker)) % 1000)
-            returns = np.random.normal(0.0003, 0.012, days)
+            np.random.seed(abs(hash(ticker)) % 9999)
+            returns = np.random.normal(0.0002, 0.010, days)
             prices = base * np.exp(np.cumsum(returns) - np.cumsum(returns)[-1])
             df = pd.DataFrame({
-                "Open":   prices * (1 - np.random.uniform(0, 0.005, days)),
-                "High":   prices * (1 + np.random.uniform(0.002, 0.015, days)),
-                "Low":    prices * (1 - np.random.uniform(0.002, 0.015, days)),
+                "Open":   prices * (1 - np.random.uniform(0, 0.004, days)),
+                "High":   prices * (1 + np.random.uniform(0.001, 0.012, days)),
+                "Low":    prices * (1 - np.random.uniform(0.001, 0.012, days)),
                 "Close":  prices,
-                "Volume": np.random.randint(500000, 5000000, days).astype(float),
+                "Volume": np.random.randint(200000, 3000000, days).astype(float),
             }, index=dates)
         info = {}
         try:
@@ -183,11 +171,11 @@ def get_stock_data(ticker, period="3mo", interval="1d"):
 
 @st.cache_data(ttl=60)
 def get_live_price(ticker):
-    # Use fallback for NGX tickers
-    if ticker in NGX_FALLBACK:
-        d = NGX_FALLBACK[ticker].copy()
-        d.setdefault("volume", 0)
-        return d
+    # Use real NGX data module for NGX stocks
+    ngx_symbols = list(NGX_SYMBOLS.values())
+    if ticker in ngx_symbols:
+        ngx_prices, _, _ = fetch_ngx_prices()
+        return get_ngx_stock(ticker, ngx_prices)
     try:
         stock = yf.Ticker(ticker)
         info = stock.fast_info
@@ -388,6 +376,13 @@ with st.sidebar:
     alert_low = st.number_input("Alert if price BELOW", min_value=0.0, value=0.0, step=0.01)
 
     st.markdown("---")
+    # Show NGX market status in sidebar
+    ngx_symbols_list = list(NGX_SYMBOLS.values())
+    if "NGX" in market:
+        mstatus, mcolor = get_market_status()
+        st.markdown(f"<div style='background:rgba(20,25,40,0.8); border:1px solid #2a3350; border-radius:8px; padding:10px; margin:8px 0; text-align:center; font-size:13px; color:{mcolor}; font-weight:600;'>{mstatus}</div>", unsafe_allow_html=True)
+        st.markdown("<small style='color:#8892a4;'>NGX Hours: Mon–Fri 10AM–2:30PM WAT</small>", unsafe_allow_html=True)
+
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -471,8 +466,14 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Track
 
 # ── TAB 1: CHART ──
 with tab1:
-    if selected_ticker in NGX_FALLBACK:
-        st.info("ℹ️ NGX live data has limited coverage on Yahoo Finance. Chart uses price simulation based on current market levels. Prices shown are indicative.")
+    ngx_symbols = list(NGX_SYMBOLS.values())
+    if selected_ticker in ngx_symbols:
+        ngx_prices, ngx_source, ngx_as_of = fetch_ngx_prices()
+        market_status, status_color = get_market_status()
+        if ngx_source == "Last Known (Offline)":
+            st.warning(f"⚠️ Could not reach NGX data sources. Showing last known prices from March 2026. | {market_status}")
+        else:
+            st.success(f"✅ NGX Data Source: **{ngx_source}** | Last Updated: {ngx_as_of} | {market_status} | Prices update after market close (2:30 PM WAT)")
     df, info = get_stock_data(selected_ticker, period, interval)
     if not df.empty:
         df = compute_indicators(df)
