@@ -8,6 +8,13 @@ import yfinance as yf
 import requests
 from datetime import datetime, timedelta
 import time
+# ── GROQ AI CONFIG (Free) ──
+try:
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+except:
+    import os
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
 from ngx_data import (
     fetch_ngx_prices, get_ngx_stock, get_ngx_history,
     get_market_status, NGX_SYMBOLS, NGX_LAST_KNOWN, is_market_open
@@ -729,7 +736,7 @@ with tab4:
 # ── TAB 5: AI MARKET INSIGHTS ──
 with tab5:
     st.markdown("<div class='section-header'>🤖 AI Market Insights</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color:#8892a4;'>Powered by Claude AI · Analysis is for informational purposes only, not financial advice</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Powered by Groq AI (LLaMA 3.3 70B) · Analysis is for informational purposes only, not financial advice</small>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
     # AI analysis type selector
@@ -883,21 +890,40 @@ Note: This is for informational purposes only, not financial advice.""",
 
         with st.spinner("🤖 AI is analyzing the market data..."):
             try:
+                if not GROQ_API_KEY:
+                    st.error("⚠️ Groq API key not configured. Add GROQ_API_KEY to your Streamlit secrets.")
+                    st.stop()
+
                 response = requests.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={"Content-Type": "application/json"},
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                    },
                     json={
-                        "model": "claude-sonnet-4-20250514",
+                        "model": "llama-3.3-70b-versatile",
                         "max_tokens": 1000,
-                        "messages": [{"role": "user", "content": selected_prompt}]
+                        "temperature": 0.7,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "You are a professional financial analyst and market strategist with deep expertise in global markets including Nigerian stocks (NGX), US equities, cryptocurrencies, and commodities. Provide clear, data-driven, professional analysis."
+                            },
+                            {"role": "user", "content": selected_prompt}
+                        ]
                     },
                     timeout=30
                 )
                 data = response.json()
                 ai_text = ""
-                for block in data.get("content", []):
-                    if block.get("type") == "text":
-                        ai_text += block.get("text", "")
+                if "choices" in data:
+                    ai_text = data["choices"][0].get("message", {}).get("content", "")
+
+                if not ai_text and "error" in data:
+                    err = data.get("error", {})
+                    st.error(f"Groq API Error: {err.get('message', 'Unknown error')}")
+                elif not ai_text:
+                    st.error(f"Empty response. Please try again.")
 
                 if ai_text:
                     # Display AI response in styled card
@@ -905,7 +931,7 @@ Note: This is for informational purposes only, not financial advice.""",
                     <div style='background:linear-gradient(135deg,#141928,#1a2035); border:1px solid #2a3350;
                          border-left: 4px solid #1b4fd8; border-radius:12px; padding:24px; margin:16px 0;'>
                         <div style='font-size:13px; color:#1b4fd8; font-weight:600; margin-bottom:12px;'>
-                            🤖 AI Analysis · {analysis_type} · {selected_name} · {datetime.now().strftime("%Y-%m-%d %H:%M")}
+                            🤖 Groq AI Analysis · {analysis_type} · {selected_name} · {datetime.now().strftime("%Y-%m-%d %H:%M")}
                         </div>
                         <div style='color:#e0e6f0; font-size:14px; line-height:1.8; white-space:pre-wrap;'>{ai_text}</div>
                         <div style='margin-top:16px; font-size:11px; color:#8892a4; border-top:1px solid #2a3350; padding-top:10px;'>
