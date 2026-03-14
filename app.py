@@ -960,26 +960,7 @@ Note: This is for informational purposes only, not financial advice.""",
             except Exception as e:
                 st.error(f"AI analysis failed: {str(e)}. Please check your connection and try again.")
 
-    else:
-        # Show placeholder when not yet run
-        st.markdown("""
-        <div style='background:#141928; border:1px solid #2a3350; border-radius:12px; padding:40px; text-align:center; margin:20px 0;'>
-            <div style='font-size:40px; margin-bottom:12px;'>🤖</div>
-            <div style='font-size:18px; font-weight:600; color:white; margin-bottom:8px;'>AI Market Intelligence</div>
-            <div style='color:#8892a4; font-size:14px; max-width:500px; margin:0 auto;'>
-                Select an analysis type above and click <strong style='color:#1b4fd8;'>Generate AI Analysis</strong> 
-                to get instant professional-grade market insights powered by Claude AI.
-            </div>
-            <div style='margin-top:20px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;'>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>📈 Stock Summary</span>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>🎯 Technical Analysis</span>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>📰 Sentiment Report</span>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>⚖️ Risk Assessment</span>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>🌍 Macro Commentary</span>
-                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>💡 Investment Thesis</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+
 
 # ── FOOTER ──
 st.markdown("<br>", unsafe_allow_html=True)
