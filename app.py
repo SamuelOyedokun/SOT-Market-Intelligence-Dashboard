@@ -1312,35 +1312,30 @@ with tab6:
     if "alerts" not in st.session_state:
         st.session_state.alerts = []
 
-    # ── EMAIL SENDER CONFIG ──
-    with st.expander("⚙️ Email Configuration (Required for email alerts)", expanded=len(st.session_state.alerts) == 0):
-        st.markdown("<small style='color:#8892a4;'>Use a Gmail account to send alerts. You must use a Gmail App Password, not your regular password.</small>", unsafe_allow_html=True)
-        ec1, ec2 = st.columns(2)
-        with ec1:
-            sender_email_input = st.text_input("📧 Sender Gmail Address", placeholder="yourgmail@gmail.com", key="sender_email_cfg")
-        with ec2:
-            sender_pass_input  = st.text_input("🔑 Gmail App Password", type="password", placeholder="xxxx xxxx xxxx xxxx", key="sender_pass_cfg")
+    # ── EMAIL SENDER CONFIG (loaded from Streamlit secrets only — never shown to users) ──
+    try:
+        st.session_state.alert_email_sender   = st.secrets.get("ALERT_SENDER_EMAIL", "")
+        st.session_state.alert_email_password = st.secrets.get("ALERT_SENDER_PASSWORD", "")
+    except:
+        pass
 
+    email_ready = bool(st.session_state.get("alert_email_sender"))
+    if email_ready:
         st.markdown("""
-        <div style='background:#141928; border:1px solid #2a3350; border-radius:8px; padding:12px; margin-top:8px;'>
-            <div style='color:#f0a500; font-size:13px; font-weight:600; margin-bottom:6px;'>📋 How to get a Gmail App Password:</div>
-            <div style='color:#8892a4; font-size:12px; line-height:1.8;'>
-                1. Go to <strong style='color:white;'>myaccount.google.com</strong><br>
-                2. Click <strong style='color:white;'>Security</strong> → <strong style='color:white;'>2-Step Verification</strong> (must be ON)<br>
-                3. Scroll down → click <strong style='color:white;'>App Passwords</strong><br>
-                4. Select app: <strong style='color:white;'>Mail</strong> → Generate<br>
-                5. Copy the 16-character password → paste above
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        if st.button("💾 Save Email Config", use_container_width=True, key="save_email_cfg"):
-            if sender_email_input and sender_pass_input:
-                st.session_state.alert_email_sender   = sender_email_input
-                st.session_state.alert_email_password = sender_pass_input
-                st.success("✅ Email config saved for this session!")
-            else:
-                st.error("Fill in both email and app password.")
+        <div style='background:rgba(0,212,170,0.08); border:1px solid rgba(0,212,170,0.3);
+             border-radius:8px; padding:10px 14px; margin-bottom:16px;'>
+            <span style='color:#00d4aa; font-size:13px; font-weight:600;'>
+                ✅ Email alerts active — you will receive notifications at your email address
+            </span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style='background:rgba(240,165,0,0.08); border:1px solid rgba(240,165,0,0.3);
+             border-radius:8px; padding:10px 14px; margin-bottom:16px;'>
+            <span style='color:#f0a500; font-size:13px; font-weight:600;'>
+                ⚠️ Email alerts not configured — alerts will still trigger on screen but no emails will be sent.
+            </span>
+        </div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1392,8 +1387,12 @@ with tab6:
     col_check, col_clear = st.columns([1, 1])
     with col_check:
         if st.button("🔍 Check All Alerts Now", use_container_width=True, key="manual_check"):
-            sender_e = st.session_state.get("alert_email_sender", "")
-            sender_p = st.session_state.get("alert_email_password", "")
+            try:
+                sender_e = st.secrets.get("ALERT_SENDER_EMAIL", "")
+                sender_p = st.secrets.get("ALERT_SENDER_PASSWORD", "")
+            except:
+                sender_e = st.session_state.get("alert_email_sender", "")
+                sender_p = st.session_state.get("alert_email_password", "")
             fired = check_and_fire_alerts(st.session_state.alerts, sender_e, sender_p)
             if fired:
                 for alert, cp in fired:
