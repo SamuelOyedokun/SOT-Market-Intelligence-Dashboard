@@ -462,7 +462,7 @@ if alert_low > 0 and price < alert_low and price > 0:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS ──
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview", "🤖 AI Market Insights"])
 
 # ── TAB 1: CHART ──
 with tab1:
@@ -725,6 +725,235 @@ with tab4:
     fig_comp.update_xaxes(gridcolor="#1a2035")
     fig_comp.update_yaxes(gridcolor="#1a2035")
     st.plotly_chart(fig_comp, use_container_width=True)
+
+# ── TAB 5: AI MARKET INSIGHTS ──
+with tab5:
+    st.markdown("<div class='section-header'>🤖 AI Market Insights</div>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Powered by Claude AI · Analysis is for informational purposes only, not financial advice</small>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # AI analysis type selector
+    ai_col1, ai_col2 = st.columns([2, 1])
+    with ai_col1:
+        analysis_type = st.selectbox("📋 Analysis Type", [
+            "📈 Stock Summary & Outlook",
+            "🎯 Technical Analysis Interpretation",
+            "📰 Market Sentiment Report",
+            "⚖️ Risk Assessment",
+            "🌍 Sector & Macro Commentary",
+            "💡 Investment Thesis",
+        ])
+    with ai_col2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        run_analysis = st.button("🚀 Generate AI Analysis", use_container_width=True)
+
+    # Build context from live data
+    live_ctx = get_live_price(selected_ticker)
+    price_ctx    = live_ctx.get("price", 0)
+    change_ctx   = live_ctx.get("change", 0)
+    chg_pct_ctx  = live_ctx.get("change_pct", 0)
+    high_ctx     = live_ctx.get("high", 0)
+    low_ctx      = live_ctx.get("low", 0)
+    vol_ctx      = live_ctx.get("volume", 0)
+
+    # Get RSI from chart data if available
+    try:
+        df_ai, _ = get_stock_data(selected_ticker, "3mo", "1d")
+        if not df_ai.empty:
+            df_ai = compute_indicators(df_ai)
+            rsi_ctx      = round(df_ai["RSI"].iloc[-1], 1) if "RSI" in df_ai.columns else "N/A"
+            ma20_ctx     = round(df_ai["MA20"].iloc[-1], 2) if "MA20" in df_ai.columns else "N/A"
+            period_ret   = round(((df_ai["Close"].iloc[-1] - df_ai["Close"].iloc[0]) / df_ai["Close"].iloc[0]) * 100, 2)
+            volatility   = round(df_ai["Close"].pct_change().std() * (252**0.5) * 100, 1)
+        else:
+            rsi_ctx = ma20_ctx = period_ret = volatility = "N/A"
+    except:
+        rsi_ctx = ma20_ctx = period_ret = volatility = "N/A"
+
+    # Market context
+    mkt_type = "NGX (Nigerian Stock Exchange)" if selected_ticker in list(NGX_SYMBOLS.values()) else                "Cryptocurrency" if "-USD" in selected_ticker else                "Commodity" if "=F" in selected_ticker else "US Stock"
+
+    direction = "up" if change_ctx >= 0 else "down"
+
+    # Show context card
+    st.markdown(f"""
+    <div class='metric-card' style='margin-bottom:16px;'>
+        <div style='font-size:13px; color:#8892a4; margin-bottom:8px;'>📊 Current Data Context for Analysis</div>
+        <div style='display:flex; gap:32px; flex-wrap:wrap;'>
+            <div><span style='color:#8892a4; font-size:12px;'>Asset</span><br><span style='color:white; font-weight:600;'>{selected_name}</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>Market</span><br><span style='color:white; font-weight:600;'>{mkt_type}</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>Price</span><br><span style='color:white; font-weight:600;'>{price_ctx:,.2f}</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>Change</span><br><span style='color:{"#00d4aa" if change_ctx>=0 else "#ff4757"}; font-weight:600;'>{"▲" if change_ctx>=0 else "▼"} {abs(chg_pct_ctx):.2f}%</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>RSI</span><br><span style='color:white; font-weight:600;'>{rsi_ctx}</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>3M Return</span><br><span style='color:white; font-weight:600;'>{period_ret}%</span></div>
+            <div><span style='color:#8892a4; font-size:12px;'>Volatility</span><br><span style='color:white; font-weight:600;'>{volatility}%</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if run_analysis:
+        # Build prompt based on analysis type
+        base_data = f"""
+Asset: {selected_name} ({selected_ticker})
+Market: {mkt_type}
+Current Price: {price_ctx:,.2f}
+Price Change Today: {change_ctx:+.4f} ({chg_pct_ctx:+.2f}%) — moved {direction}
+52-Week High: {high_ctx:,.2f}
+52-Week Low: {low_ctx:,.2f}
+3-Month Return: {period_ret}%
+Annual Volatility: {volatility}%
+RSI (14): {rsi_ctx}
+MA20: {ma20_ctx}
+Average Volume: {vol_ctx:,.0f}
+"""
+
+        prompts = {
+            "📈 Stock Summary & Outlook": f"""You are a professional financial analyst. Based on the following market data, write a concise, insightful stock summary and near-term outlook for {selected_name}.
+
+{base_data}
+
+Write 3-4 paragraphs covering:
+1. Current price action and momentum
+2. Key technical levels (support/resistance based on 52W range and MA)
+3. RSI signal interpretation
+4. Near-term outlook (bullish/bearish/neutral) with reasoning
+
+Be specific, use the data provided, and write in a professional financial analyst tone. End with a clear outlook statement.""",
+
+            "🎯 Technical Analysis Interpretation": f"""You are a technical analyst. Interpret the following technical data for {selected_name} and explain what the indicators are signaling.
+
+{base_data}
+
+Provide:
+1. Trend analysis (based on price vs MA20 and 3M return)
+2. RSI interpretation — is the stock overbought, oversold, or neutral?
+3. Volatility assessment
+4. Key price levels to watch (based on 52W high/low)
+5. Overall technical rating: Bullish / Neutral / Bearish with clear reasoning""",
+
+            "📰 Market Sentiment Report": f"""You are a market strategist. Write a professional market sentiment report for {selected_name}.
+
+{base_data}
+
+Structure the report as:
+1. Market Pulse — how is this asset trading today?
+2. Momentum Assessment — is buying or selling pressure dominant?
+3. Investor Sentiment — what does the data suggest about market confidence?
+4. Comparable market context — how might macro factors (interest rates, oil prices, currency) affect this asset?
+5. Sentiment Score: Bullish / Cautious / Bearish (with brief justification)""",
+
+            "⚖️ Risk Assessment": f"""You are a risk analyst. Provide a thorough risk assessment for {selected_name} based on the data below.
+
+{base_data}
+
+Cover:
+1. Volatility Risk — is the annual volatility high or low for this asset class?
+2. Drawdown Risk — how far is the price from its 52-week high?
+3. Momentum Risk — RSI and recent return signals
+4. Liquidity Risk — volume assessment
+5. Overall Risk Rating: Low / Medium / High / Very High
+6. Key risk factors to monitor""",
+
+            "🌍 Sector & Macro Commentary": f"""You are a macro analyst. Write a sector and macroeconomic commentary for {selected_name}.
+
+{base_data}
+
+Address:
+1. Sector positioning — what sector/industry does this asset belong to?
+2. Macro tailwinds and headwinds relevant to this asset
+3. How Nigerian economic conditions / global market conditions may impact this asset
+4. Currency and inflation considerations where relevant
+5. Key macro events or data releases to watch""",
+
+            "💡 Investment Thesis": f"""You are an investment analyst. Write a clear investment thesis for {selected_name} based on the current market data.
+
+{base_data}
+
+Structure as:
+1. The Bull Case — reasons to be positive on this asset
+2. The Bear Case — risks and reasons for caution  
+3. Key Catalysts — what could drive price higher or lower
+4. Price Levels to Watch — entry/exit considerations based on technicals
+5. Thesis Summary — one paragraph conclusion
+
+Note: This is for informational purposes only, not financial advice.""",
+        }
+
+        selected_prompt = prompts.get(analysis_type, prompts["📈 Stock Summary & Outlook"])
+
+        with st.spinner("🤖 AI is analyzing the market data..."):
+            try:
+                response = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 1000,
+                        "messages": [{"role": "user", "content": selected_prompt}]
+                    },
+                    timeout=30
+                )
+                data = response.json()
+                ai_text = ""
+                for block in data.get("content", []):
+                    if block.get("type") == "text":
+                        ai_text += block.get("text", "")
+
+                if ai_text:
+                    # Display AI response in styled card
+                    st.markdown(f"""
+                    <div style='background:linear-gradient(135deg,#141928,#1a2035); border:1px solid #2a3350;
+                         border-left: 4px solid #1b4fd8; border-radius:12px; padding:24px; margin:16px 0;'>
+                        <div style='font-size:13px; color:#1b4fd8; font-weight:600; margin-bottom:12px;'>
+                            🤖 AI Analysis · {analysis_type} · {selected_name} · {datetime.now().strftime("%Y-%m-%d %H:%M")}
+                        </div>
+                        <div style='color:#e0e6f0; font-size:14px; line-height:1.8; white-space:pre-wrap;'>{ai_text}</div>
+                        <div style='margin-top:16px; font-size:11px; color:#8892a4; border-top:1px solid #2a3350; padding-top:10px;'>
+                            ⚠️ This analysis is generated by AI for informational purposes only. It is not financial advice.
+                            Always do your own research before making investment decisions.
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # Download button
+                    report = f"SOT Market Intelligence — AI Analysis\n{'='*50}\n"
+                    report += f"Asset: {selected_name} ({selected_ticker})\n"
+                    report += f"Analysis Type: {analysis_type}\n"
+                    report += f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                    report += f"{'='*50}\n\n{ai_text}\n\n"
+                    report += "⚠️ For informational purposes only. Not financial advice."
+                    st.download_button(
+                        "📥 Download Report",
+                        data=report,
+                        file_name=f"SOT_AI_{selected_name.replace(' ','_')}_{datetime.now().strftime('%Y%m%d')}.txt",
+                        mime="text/plain"
+                    )
+                else:
+                    st.error("AI returned an empty response. Please try again.")
+
+            except Exception as e:
+                st.error(f"AI analysis failed: {str(e)}. Please check your connection and try again.")
+
+    else:
+        # Show placeholder when not yet run
+        st.markdown("""
+        <div style='background:#141928; border:1px solid #2a3350; border-radius:12px; padding:40px; text-align:center; margin:20px 0;'>
+            <div style='font-size:40px; margin-bottom:12px;'>🤖</div>
+            <div style='font-size:18px; font-weight:600; color:white; margin-bottom:8px;'>AI Market Intelligence</div>
+            <div style='color:#8892a4; font-size:14px; max-width:500px; margin:0 auto;'>
+                Select an analysis type above and click <strong style='color:#1b4fd8;'>Generate AI Analysis</strong> 
+                to get instant professional-grade market insights powered by Claude AI.
+            </div>
+            <div style='margin-top:20px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap;'>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>📈 Stock Summary</span>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>🎯 Technical Analysis</span>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>📰 Sentiment Report</span>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>⚖️ Risk Assessment</span>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>🌍 Macro Commentary</span>
+                <span style='background:#1b4fd820; border:1px solid #1b4fd840; border-radius:20px; padding:6px 14px; font-size:12px; color:#1b4fd8;'>💡 Investment Thesis</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ── FOOTER ──
 st.markdown("<br>", unsafe_allow_html=True)
