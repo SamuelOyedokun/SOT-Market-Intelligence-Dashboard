@@ -120,7 +120,7 @@ NGX_TICKERS = {
     "Airtel Africa": "AIRTELAFRI.LG"
 }
 
-NEWS_API_KEY = "YOUR_NEWSAPI_KEY"  # Free at newsapi.org
+NEWS_API_KEY = "bca6285fbfa8401bbbea1a81be93d394"  # Free at newsapi.org
 
 
 # ── DATA FUNCTIONS ──
