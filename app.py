@@ -120,6 +120,19 @@ NGX_TICKERS = {
     "Airtel Africa": "AIRTELAFRI.LG"
 }
 
+COMMODITIES_TICKERS = {
+    "Gold": "GC=F",
+    "Silver": "SI=F",
+    "Crude Oil (WTI)": "CL=F",
+    "Brent Crude": "BZ=F",
+    "Natural Gas": "NG=F",
+    "Copper": "HG=F",
+    "Platinum": "PL=F",
+    "Corn": "ZC=F",
+    "Wheat": "ZW=F",
+    "Coffee": "KC=F",
+}
+
 NEWS_API_KEY = "bca6285fbfa8401bbbea1a81be93d394"  # Free at newsapi.org
 
 
@@ -292,17 +305,20 @@ with st.sidebar:
     st.markdown("## 📈 SOT Market Intel")
     st.markdown("---")
 
-    market = st.selectbox("🌍 Market", ["🇺🇸 US Stocks", "₿ Crypto", "🇳🇬 NGX Stocks"])
-    
+    market = st.selectbox("🌍 Market", ["🇺🇸 US Stocks", "₿ Crypto", "🇳🇬 NGX Stocks", "🛢 Commodities"])
+
     if "US" in market:
         ticker_map = US_TICKERS
         currency = "USD"
     elif "Crypto" in market:
         ticker_map = CRYPTO_TICKERS
         currency = "USD"
-    else:
+    elif "NGX" in market:
         ticker_map = NGX_TICKERS
         currency = "NGN"
+    else:
+        ticker_map = COMMODITIES_TICKERS
+        currency = "USD"
 
     selected_name = st.selectbox("📊 Select Asset", list(ticker_map.keys()))
     selected_ticker = ticker_map[selected_name]
@@ -601,7 +617,9 @@ with tab4:
 
     # Top movers — fetch a few key tickers
     watch_tickers = {"AAPL": "Apple", "MSFT": "Microsoft", "TSLA": "Tesla",
-                     "NVDA": "NVIDIA", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum"}
+                     "NVDA": "NVIDIA", "BTC-USD": "Bitcoin", "ETH-USD": "Ethereum",
+                     "GC=F": "Gold", "CL=F": "Crude Oil", "SI=F": "Silver"
+    }
 
     overview_data = []
     for ticker, name in watch_tickers.items():
