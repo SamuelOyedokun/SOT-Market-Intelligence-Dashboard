@@ -11,10 +11,10 @@ from datetime import datetime, timedelta
 import time
 # ── GROQ AI CONFIG (Free) ──
 try:
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY")
 except:
     import os
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 import smtplib
 from email.mime.text import MIMEText
@@ -278,14 +278,19 @@ def get_live_price(ticker):
 
 
 # ── RSS FEED SOURCES ──
+# Finance-only RSS feeds — these are reliable and don't return irrelevant content
 RSS_FEEDS = {
     "Reuters Business":    "https://feeds.reuters.com/reuters/businessNews",
+    "Reuters Technology":  "https://feeds.reuters.com/reuters/technologyNews",
     "MarketWatch":         "https://feeds.marketwatch.com/marketwatch/topstories",
     "Yahoo Finance":       "https://finance.yahoo.com/news/rssindex",
     "CNBC Finance":        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
-    "Seeking Alpha":       "https://seekingalpha.com/market_currents.xml",
     "Nairametrics":        "https://nairametrics.com/feed/",
     "BusinessDay Nigeria": "https://businessday.ng/feed/",
+    "Seeking Alpha":       "https://seekingalpha.com/market_currents.xml",
+    "9to5Mac":             "https://9to5mac.com/feed/",
+    "MacRumors":           "https://feeds.macrumors.com/MacRumors-All",
+    "AppleInsider":        "https://appleinsider.com/rss/news/",
 }
 
 def _keyword_sentiment(text):
@@ -408,74 +413,13 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     """
     articles = []
 
-    # Source 1: NewsAPI — using /everything with strict finance query
-    if NEWS_API_KEY:
-        try:
-            ticker_part = query
-            # Use strict quoted search — asset name + financial term
-            for search_q in [
-                f'"{ticker_part}" stock',
-                f'"{ticker_part}" earnings',
-                f'"{ticker_part}" shares',
-            ]:
-                if len(articles) >= 5:
-                    break
-                url = (
-                    f"https://newsapi.org/v2/everything"
-                    f"?q={requests.utils.quote(search_q)}"
-                    f"&sortBy=publishedAt&pageSize=15&language=en"
-                    f"&apiKey={NEWS_API_KEY}"
-                )
-                r = requests.get(url, timeout=8)
-                if r.status_code != 200:
-                    continue
-                data = r.json()
-                raw  = data.get("articles", [])
-                ticker_lower = ticker_part.lower()
-                for a in raw:
-                    title   = (a.get("title") or "").strip()
-                    desc    = (a.get("description") or "").strip()
-                    art_url = (a.get("url") or "")
-                    source  = (a.get("source") or {}).get("name", "")
-                    if not title or title == "[Removed]":
-                        continue
-                    title_lower = title.lower()
-                    desc_lower  = desc.lower()
-                    combined    = title_lower + " " + desc_lower
-                    # 1. Asset name MUST be in title
-                    if ticker_lower not in title_lower:
-                        continue
-                    # 2. Must contain at least one clear finance/business word
-                    finance_words = [
-                        "stock","share","earn","revenue","profit","loss",
-                        "invest","analyst","market cap","upgrade","downgrade",
-                        "ipo","dividend","buyback","quarter","fiscal","guidance",
-                        "valuation","trading","rally","decline","surge","plunge",
-                        "price target","nse","ngx","sec","billion","million",
-                        "results","forecast","outlook","acquisition","merger"
-                    ]
-                    if not any(fw in combined for fw in finance_words):
-                        continue
-                    # 3. Avoid duplicates
-                    if any(ex["title"][:50] == title[:50] for ex in articles):
-                        continue
-                    clean_desc = re.sub(r'<[^>]+>', '', desc).strip()[:200]
-                    articles.append({
-                        "title":     title,
-                        "url":       art_url or "#",
-                        "published": (a.get("publishedAt") or "")[:10],
-                        "source":    source,
-                        "sentiment": "",
-                        "desc":      clean_desc,
-                    })
-                    if len(articles) >= 8:
-                        break
-        except Exception as e:
-            print(f"NewsAPI error: {e}")
+    # Source 1: NewsAPI DISABLED — free tier ignores search operators
+    # and returns irrelevant cached results regardless of query.
+    # Using RSS feeds from finance sources instead (more reliable).
 
     # Source 2: RSS feeds
     for feed_name, feed_url in RSS_FEEDS.items():
-        rss_items = _fetch_rss(feed_url, query, max_items=3)
+        rss_items = _fetch_rss(feed_url, query, max_items=5)
         for item in rss_items:
             item["source"] = feed_name
             articles.append(item)
@@ -516,7 +460,7 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     if not articles:
         # Final fallback — clearly labeled as demo
         return [
-            {"title": f"{query}: News temporarily unavailable. RSS feeds may also be restricted. Check back soon.", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
+            {"title": f"{query}: No finance news found right now. This may be a weekend or market holiday. Check back during trading hours.", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
         ]
 
     # Score sentiment — try AI first, fall back to keywords
