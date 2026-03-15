@@ -404,10 +404,10 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     # Source 1: NewsAPI — finance/tech whitelist approach
     FINANCE_SOURCES = [
         "reuters.com","bloomberg.com","cnbc.com","wsj.com","ft.com",
-        "marketwatch.com","forbes.com","techcrunch.com","theverge.com",
-        "appleinsider.com","9to5mac.com","macrumors.com","arstechnica.com",
-        "businessday.ng","nairametrics.com","seekingalpha.com","benzinga.com",
-        "thestreet.com","investopedia.com","wccftech.com","androidauthority.com",
+        "marketwatch.com","forbes.com","seekingalpha.com","benzinga.com",
+        "thestreet.com","investopedia.com","finance.yahoo.com",
+        "businessday.ng","nairametrics.com","guardian.ng",
+        "appleinsider.com","9to5mac.com","macrumors.com",
     ]
     FINANCE_KEYWORDS = [
         "stock","share","earning","revenue","profit","loss","market cap",
@@ -1187,17 +1187,17 @@ with tab3:
 
     # Debug expander — helps diagnose issues
     with st.expander('🔧 Debug Info (expand if news not loading)'):
+        all_sources = list(set(a.get('source','?') for a in news))
         st.markdown(f"""
-        - **NewsAPI Key set:** `{'✅ Yes' if NEWS_API_KEY else '❌ No'}`
-        - **Groq Key set:** `{'✅ Yes' if GROQ_API_KEY else '❌ No'}`
+        - **NewsAPI Key:** `{'✅ ' + NEWS_API_KEY[:8] + '...' if NEWS_API_KEY else '❌ Not set'}`
+        - **Groq Key:** `{'✅ Set' if GROQ_API_KEY else '❌ Not set'}`
         - **Articles found:** `{len(news)}`
-        - **First article:** `{news[0]['title'][:80] if news else 'None'}`
-        - **Source:** `{news[0].get('source','?') if news else 'None'}`
+        - **All sources:** `{all_sources}`
+        - **First title:** `{news[0]['title'][:80] if news else 'None'}`
+        - **Filter version:** `v5 — whitelist mode`
         """)
-        if st.button('🔄 Clear news cache & retry', key='clear_news_cache'):
+        if st.button('🔄 Force refresh news', key='clear_news_cache'):
             st.cache_data.clear()
-            st.rerun()
-
 
     # Data sources info
     sources_used = list(set(a["source"] for a in news if a.get("source")))
