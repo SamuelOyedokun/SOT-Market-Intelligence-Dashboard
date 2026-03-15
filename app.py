@@ -438,8 +438,8 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
                     })
                     if len(articles) >= 8:
                         break
-        except:
-            pass
+        except Exception as _news_err:
+            print(f"NewsAPI error: {_news_err}")
 
     # Source 2: RSS feeds
     for feed_name, feed_url in RSS_FEEDS.items():
@@ -460,10 +460,31 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
             unique.append(a)
     articles = unique[:12]
 
+    # Last resort: try NewsAPI with just the asset name, no relevance filter
+    if not articles and NEWS_API_KEY:
+        try:
+            url = f"https://newsapi.org/v2/everything?q={requests.utils.quote(query)}&sortBy=publishedAt&pageSize=8&language=en&apiKey={NEWS_API_KEY}"
+            r   = requests.get(url, timeout=8)
+            if r.status_code == 200:
+                for a in r.json().get("articles", [])[:8]:
+                    title = (a.get("title") or "").strip()
+                    if not title or title == "[Removed]":
+                        continue
+                    articles.append({
+                        "title":     title,
+                        "url":       a.get("url", "#"),
+                        "published": (a.get("publishedAt") or "")[:10],
+                        "source":    a.get("source", {}).get("name", "NewsAPI"),
+                        "sentiment": "",
+                        "desc":      (a.get("description") or "")[:200],
+                    })
+        except Exception as e:
+            print(f"NewsAPI fallback error: {e}")
+
     if not articles:
         # Final fallback — clearly labeled as demo
         return [
-            {"title": f"{query}: No live news available — configure NewsAPI key for real articles", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
+            {"title": f"{query}: News temporarily unavailable. RSS feeds may also be restricted. Check back soon.", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
         ]
 
     # Score sentiment — try AI first, fall back to keywords
@@ -1130,6 +1151,20 @@ with tab3:
     # Fetch news with Groq AI scoring — uses global GROQ_API_KEY loaded at startup
     with st.spinner("🔍 Fetching news from multiple sources..."):
         news = get_news_sentiment(selected_name, selected_ticker, GROQ_API_KEY)
+
+    # Debug expander — helps diagnose issues
+    with st.expander('🔧 Debug Info (expand if news not loading)'):
+        st.markdown(f"""
+        - **NewsAPI Key set:** `{'✅ Yes' if NEWS_API_KEY else '❌ No'}`
+        - **Groq Key set:** `{'✅ Yes' if GROQ_API_KEY else '❌ No'}`
+        - **Articles found:** `{len(news)}`
+        - **First article:** `{news[0]['title'][:80] if news else 'None'}`
+        - **Source:** `{news[0].get('source','?') if news else 'None'}`
+        """)
+        if st.button('🔄 Clear news cache & retry', key='clear_news_cache'):
+            st.cache_data.clear()
+            st.rerun()
+
 
     # Data sources info
     sources_used = list(set(a["source"] for a in news if a.get("source")))
