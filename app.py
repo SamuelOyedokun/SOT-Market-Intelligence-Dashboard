@@ -318,11 +318,12 @@ def _ai_sentiment_batch(articles, groq_key):
         prompt = f"""You are a financial market analyst. For each headline below, score the sentiment specifically for {query} as a publicly traded asset.
 
 Rules:
-- "Positive" = headline suggests {query}'s stock/price will go UP (good earnings, upgrade, growth, strong demand, positive news)
-- "Negative" = headline suggests {query}'s stock/price will go DOWN (bad earnings, downgrade, scandal, loss, risk)
-- "Neutral"  = headline is unrelated to {query}'s stock performance, or is balanced with no clear directional signal
+- "Positive" = headline suggests {query} stock price will go UP (earnings beat, upgrade, buyback, strong revenue, partnerships, new market entry)
+- "Negative" = headline suggests {query} stock price will go DOWN (earnings miss, downgrade, legal trouble, revenue decline, CEO departure, competition threat)
+- "Neutral"  = product reviews, tech deals, accessories, or headlines with no clear stock price impact
 
-If a headline is completely irrelevant to {query} as a financial asset, score it "Neutral".
+IMPORTANT: Product deals, discounts, gadget reviews, and accessory news = "Neutral" (not stock-relevant).
+Only executive departures, financial results, analyst ratings, and major business events affect stock price.
 
 Return ONLY a JSON array in the same order, e.g. ["Positive","Negative","Neutral"].
 No explanation, no markdown, just the JSON array.
@@ -373,13 +374,16 @@ def _fetch_rss(feed_url, query, max_items=5):
                     pub = parsedate_to_datetime(pubdate).strftime("%Y-%m-%d")
                 except:
                     pub = datetime.now().strftime("%Y-%m-%d")
+                # Strip HTML tags from description
+                clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
+                clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
                 results.append({
                     "title":     title,
                     "url":       link,
                     "published": pub,
                     "source":    "",   # filled by caller
                     "sentiment": "",   # filled later
-                    "desc":      desc[:200],
+                    "desc":      clean_desc[:200],
                 })
                 if len(results) >= max_items:
                     break
@@ -387,8 +391,7 @@ def _fetch_rss(feed_url, query, max_items=5):
         pass
     return results
 
-@st.cache_data(ttl=600)  # Cache 10 minutes
-def get_news_sentiment(query, ticker="", groq_key=""):
+def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key must be fresh each call
     """
     Multi-source news + AI sentiment:
     1. NewsAPI (if key available)
@@ -403,11 +406,13 @@ def get_news_sentiment(query, ticker="", groq_key=""):
         try:
             # Build a focused financial query
             ticker_part  = query  # e.g. "Apple" or "DANGCEM"
-            finance_query = f'"{ticker_part}" AND (stock OR shares OR earnings OR market OR price OR trading OR investor OR revenue OR profit OR loss)'
+            finance_query = f'"{ticker_part}" AND (stock OR shares OR earnings OR "stock price" OR investor OR revenue OR profit OR "market cap" OR analyst OR "Wall Street" OR NSE OR NGX)'
             url = (
                 f"https://newsapi.org/v2/everything"
                 f"?q={requests.utils.quote(finance_query)}"
                 f"&sortBy=publishedAt&pageSize=15&language=en"
+                f"&domains=reuters.com,bloomberg.com,cnbc.com,wsj.com,ft.com,"
+                f"businessday.ng,nairametrics.com,techcrunch.com,forbes.com,marketwatch.com"
                 f"&apiKey={NEWS_API_KEY}"
             )
             r = requests.get(url, timeout=8)
@@ -423,13 +428,15 @@ def get_news_sentiment(query, ticker="", groq_key=""):
                     combined = (title + " " + desc).lower()
                     if query_lower not in combined:
                         continue
+                    clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
+                    clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
                     articles.append({
                         "title":     title,
                         "url":       a.get("url", "#"),
                         "published": (a.get("publishedAt") or "")[:10],
                         "source":    a.get("source", {}).get("name", "NewsAPI"),
                         "sentiment": "",
-                        "desc":      desc[:200],
+                        "desc":      clean_desc[:200],
                     })
                     if len(articles) >= 8:
                         break
@@ -651,6 +658,8 @@ with st.sidebar:
 
     if st.button("🔄 Refresh Data", use_container_width=True):
         st.cache_data.clear()
+        # Clear news cache specifically to re-trigger AI scoring
+        get_news_sentiment.clear()
         st.rerun()
 
     st.markdown(f"<small style='color:#8892a4'>Last updated: {datetime.now().strftime('%H:%M:%S')}</small>", unsafe_allow_html=True)
@@ -1120,14 +1129,9 @@ with tab2:
 with tab3:
     st.markdown(f"<div class='section-header'>📰 News & Sentiment — {selected_name}</div>", unsafe_allow_html=True)
 
-    # Fetch news with Groq AI scoring
-    try:
-        _groq_key = st.secrets.get("GROQ_API_KEY", "")
-    except:
-        _groq_key = ""
-
+    # Fetch news with Groq AI scoring — uses global GROQ_API_KEY loaded at startup
     with st.spinner("🔍 Fetching news from multiple sources..."):
-        news = get_news_sentiment(selected_name, selected_ticker, _groq_key)
+        news = get_news_sentiment(selected_name, selected_ticker, GROQ_API_KEY)
 
     # Data sources info
     sources_used = list(set(a["source"] for a in news if a.get("source")))
@@ -1251,6 +1255,9 @@ with tab3:
         url   = article.get("url","#")
         link  = f"<a href='{url}' target='_blank' style='color:#1b4fd8; font-size:11px; text-decoration:none;'>Read full article →</a>" if url != "#" else ""
         desc  = article.get("desc","")
+        # Strip HTML tags from RSS descriptions before rendering
+        import re as _re
+        desc  = _re.sub(r'<[^>]+>', '', desc).strip()[:200]
         desc_html = f"<div style='color:#8892a4; font-size:12px; margin-top:6px; line-height:1.5;'>{desc}</div>" if desc else ""
 
         st.markdown(f"""
