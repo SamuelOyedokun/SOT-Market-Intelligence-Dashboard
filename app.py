@@ -288,14 +288,23 @@ RSS_FEEDS = {
 }
 
 def _keyword_sentiment(text):
-    """Fast keyword-based sentiment scoring"""
+    """Finance-specific keyword sentiment scoring"""
     pos = ["surge","rally","gain","rise","bull","profit","growth","beat","high",
-           "strong","up","positive","record","breakthrough","upgrade","buy"]
+           "strong","record","breakthrough","upgrade","buy","outperform","boost",
+           "revenue","earnings beat","raised guidance","dividend","acquisition",
+           "partnership","launch","approval","expansion","recovery","rebound"]
     neg = ["crash","fall","drop","bear","loss","down","decline","miss","risk",
-           "weak","negative","cut","downgrade","sell","concern","warning","slump"]
-    t   = text.lower()
-    ps  = sum(1 for w in pos if w in t)
-    ns  = sum(1 for w in neg if w in t)
+           "weak","cut","downgrade","sell","concern","warning","slump","recall",
+           "investigation","lawsuit","fine","penalty","layoff","bankruptcy",
+           "missed expectations","lowered guidance","debt","fraud","scandal"]
+    # Irrelevant signals — if only these match, mark neutral
+    irrelevant = ["recipe","festival","concert","sports","weather","celebrity",
+                  "entertainment","movie","music","food","travel","fashion"]
+    t  = text.lower()
+    if any(w in t for w in irrelevant) and not any(w in t for w in pos + neg):
+        return "Neutral"
+    ps = sum(1 for w in pos if w in t)
+    ns = sum(1 for w in neg if w in t)
     if ps > ns:   return "Positive"
     elif ns > ps: return "Negative"
     return "Neutral"
@@ -306,10 +315,19 @@ def _ai_sentiment_batch(articles, groq_key):
         return None
     try:
         headlines = "\n".join([f"{i+1}. {a['title']}" for i, a in enumerate(articles)])
-        prompt = f"""Score the financial market sentiment of each headline as Positive, Negative, or Neutral.
-Return ONLY a JSON array of strings in the same order, e.g. ["Positive","Negative","Neutral"].
+        prompt = f"""You are a financial market analyst. For each headline below, score the sentiment specifically for {query} as a publicly traded asset.
+
+Rules:
+- "Positive" = headline suggests {query}'s stock/price will go UP (good earnings, upgrade, growth, strong demand, positive news)
+- "Negative" = headline suggests {query}'s stock/price will go DOWN (bad earnings, downgrade, scandal, loss, risk)
+- "Neutral"  = headline is unrelated to {query}'s stock performance, or is balanced with no clear directional signal
+
+If a headline is completely irrelevant to {query} as a financial asset, score it "Neutral".
+
+Return ONLY a JSON array in the same order, e.g. ["Positive","Negative","Neutral"].
 No explanation, no markdown, just the JSON array.
 
+Asset: {query}
 Headlines:
 {headlines}"""
         r = requests.post(
@@ -346,8 +364,9 @@ def _fetch_rss(feed_url, query, max_items=5):
             pubdate = (item.findtext("pubDate")      or "").strip()
             desc    = (item.findtext("description")  or "").strip()
             combined = (title + " " + desc).lower()
-            # Include if any query term matches
-            if any(term in combined for term in query_terms):
+            # Require the main asset name to appear (not just any term)
+            main_term = query_terms[0] if query_terms else ""
+            if main_term and main_term in combined:
                 # Parse date
                 try:
                     from email.utils import parsedate_to_datetime
@@ -369,7 +388,7 @@ def _fetch_rss(feed_url, query, max_items=5):
     return results
 
 @st.cache_data(ttl=600)  # Cache 10 minutes
-def get_news_sentiment(query, groq_key=""):
+def get_news_sentiment(query, ticker="", groq_key=""):
     """
     Multi-source news + AI sentiment:
     1. NewsAPI (if key available)
@@ -379,15 +398,30 @@ def get_news_sentiment(query, groq_key=""):
     """
     articles = []
 
-    # Source 1: NewsAPI
+    # Source 1: NewsAPI — finance-specific query to reduce irrelevant articles
     if NEWS_API_KEY:
         try:
-            url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&pageSize=10&language=en&apiKey={NEWS_API_KEY}"
-            r   = requests.get(url, timeout=8)
+            # Build a focused financial query
+            ticker_part  = query  # e.g. "Apple" or "DANGCEM"
+            finance_query = f'"{ticker_part}" AND (stock OR shares OR earnings OR market OR price OR trading OR investor OR revenue OR profit OR loss)'
+            url = (
+                f"https://newsapi.org/v2/everything"
+                f"?q={requests.utils.quote(finance_query)}"
+                f"&sortBy=publishedAt&pageSize=15&language=en"
+                f"&apiKey={NEWS_API_KEY}"
+            )
+            r = requests.get(url, timeout=8)
             if r.status_code == 200:
-                for a in r.json().get("articles", [])[:8]:
+                raw_articles = r.json().get("articles", [])
+                query_lower  = ticker_part.lower()
+                for a in raw_articles:
                     title = (a.get("title") or "").strip()
+                    desc  = (a.get("description") or "").strip()
                     if not title or title == "[Removed]":
+                        continue
+                    # Relevance filter: title or desc must mention the asset
+                    combined = (title + " " + desc).lower()
+                    if query_lower not in combined:
                         continue
                     articles.append({
                         "title":     title,
@@ -395,8 +429,10 @@ def get_news_sentiment(query, groq_key=""):
                         "published": (a.get("publishedAt") or "")[:10],
                         "source":    a.get("source", {}).get("name", "NewsAPI"),
                         "sentiment": "",
-                        "desc":      (a.get("description") or "")[:200],
+                        "desc":      desc[:200],
                     })
+                    if len(articles) >= 8:
+                        break
         except:
             pass
 
@@ -602,7 +638,6 @@ with st.sidebar:
                 })
             st.success(f"Alert set for {selected_name}!")
 
-    # Keep backward compat
     alert_high = st.session_state.get("alert_high_input", 0.0)
     alert_low  = st.session_state.get("alert_low_input",  0.0)
 
@@ -1092,7 +1127,7 @@ with tab3:
         _groq_key = ""
 
     with st.spinner("🔍 Fetching news from multiple sources..."):
-        news = get_news_sentiment(selected_name, _groq_key)
+        news = get_news_sentiment(selected_name, selected_ticker, _groq_key)
 
     # Data sources info
     sources_used = list(set(a["source"] for a in news if a.get("source")))
@@ -1102,7 +1137,8 @@ with tab3:
          padding:10px 16px; margin-bottom:16px; font-size:12px; color:#8892a4;'>
         📡 <strong style='color:white;'>Sources:</strong> {", ".join(sources_used) if sources_used else "Demo"} &nbsp;·&nbsp;
         🤖 <strong style='color:white;'>{ai_scored}/{len(news)}</strong> articles scored by AI &nbsp;·&nbsp;
-        📰 <strong style='color:white;'>{len(news)}</strong> articles collected
+        📰 <strong style='color:white;'>{len(news)}</strong> relevant articles &nbsp;·&nbsp;
+        🎯 <strong style='color:#00d4aa;'>Finance-filtered</strong>
     </div>""", unsafe_allow_html=True)
 
     # Sentiment counts
@@ -1629,7 +1665,7 @@ with tab6:
                     if sender_e:
                         st.info(f"📧 Email sent to {alert['email']}")
                     else:
-                        st.warning("⚠️ Email not sent — configure Gmail above to enable email alerts")
+                        st.warning("⚠️ Email not sent — ALERT_SENDER_EMAIL not set in Streamlit Secrets")
                 st.rerun()
             else:
                 st.info(f"✅ Checked {len(active_alerts)} alert(s) — none triggered yet.")
