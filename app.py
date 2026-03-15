@@ -203,12 +203,12 @@ COMMODITIES_TICKERS = {
 # NGX tickers — symbols map to NGX stock codes (not Yahoo Finance)
 NGX_TICKERS = {name: symbol for name, symbol in NGX_SYMBOLS.items()}
 
-# ── NEWS API KEY (from Streamlit secrets) ──
+# ── NEWS API KEY ──
 try:
-    NEWS_API_KEY = st.secrets.get("NEWS_API_KEY", "")
+    NEWS_API_KEY = st.secrets.get("NEWS_API_KEY", "bca6285fbfa8401bbbea1a81be93d394")
 except:
     import os
-    NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
+    NEWS_API_KEY = os.getenv("NEWS_API_KEY", "bca6285fbfa8401bbbea1a81be93d394")
 
 
 # ── DATA FUNCTIONS ──
@@ -405,14 +405,12 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     if NEWS_API_KEY:
         try:
             # Build a focused financial query
-            ticker_part  = query  # e.g. "Apple" or "DANGCEM"
-            finance_query = f'"{ticker_part}" AND (stock OR shares OR earnings OR "stock price" OR investor OR revenue OR profit OR "market cap" OR analyst OR "Wall Street" OR NSE OR NGX)'
+            ticker_part   = query
+            finance_query = f"{ticker_part} stock"
             url = (
                 f"https://newsapi.org/v2/everything"
                 f"?q={requests.utils.quote(finance_query)}"
-                f"&sortBy=publishedAt&pageSize=15&language=en"
-                f"&domains=reuters.com,bloomberg.com,cnbc.com,wsj.com,ft.com,"
-                f"businessday.ng,nairametrics.com,techcrunch.com,forbes.com,marketwatch.com"
+                f"&sortBy=publishedAt&pageSize=20&language=en"
                 f"&apiKey={NEWS_API_KEY}"
             )
             r = requests.get(url, timeout=8)
