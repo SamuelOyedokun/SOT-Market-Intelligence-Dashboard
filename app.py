@@ -280,9 +280,10 @@ def get_live_price(ticker):
 # ── RSS FEED SOURCES ──
 RSS_FEEDS = {
     "Reuters Business":    "https://feeds.reuters.com/reuters/businessNews",
-    "BBC Business":        "http://feeds.bbci.co.uk/news/business/rss.xml",
     "MarketWatch":         "https://feeds.marketwatch.com/marketwatch/topstories",
     "Yahoo Finance":       "https://finance.yahoo.com/news/rssindex",
+    "CNBC Finance":        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
+    "Seeking Alpha":       "https://seekingalpha.com/market_currents.xml",
     "Nairametrics":        "https://nairametrics.com/feed/",
     "BusinessDay Nigeria": "https://businessday.ng/feed/",
 }
@@ -367,7 +368,13 @@ def _fetch_rss(feed_url, query, max_items=5):
             combined = (title + " " + desc).lower()
             # Require the main asset name to appear (not just any term)
             main_term = query_terms[0] if query_terms else ""
-            if main_term and main_term in combined:
+            # Require asset name in title AND at least one finance word
+            rss_finance = ["stock","share","earn","revenue","profit","loss",
+                          "market","invest","analyst","quarter","fiscal","trading",
+                          "billion","million","nse","ngx","upgrade","downgrade"]
+            title_has_asset   = main_term and main_term in title.lower()
+            content_has_finance = any(fw in combined for fw in rss_finance)
+            if title_has_asset and content_has_finance:
                 # Parse date
                 try:
                     from email.utils import parsedate_to_datetime
@@ -401,76 +408,70 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     """
     articles = []
 
-    # Source 1: NewsAPI — finance/tech whitelist approach
-    FINANCE_SOURCES = [
-        "reuters.com","bloomberg.com","cnbc.com","wsj.com","ft.com",
-        "marketwatch.com","forbes.com","seekingalpha.com","benzinga.com",
-        "thestreet.com","investopedia.com","finance.yahoo.com",
-        "businessday.ng","nairametrics.com","guardian.ng",
-        "appleinsider.com","9to5mac.com","macrumors.com",
-    ]
-    FINANCE_KEYWORDS = [
-        "stock","share","earning","revenue","profit","loss","market cap",
-        "invest","analyst","upgrade","downgrade","price target","ipo",
-        "quarterly","dividend","buyback","valuation","trading","rally",
-        "decline","surge","plunge","nse","ngx","sec","fiscal","guidance",
-    ]
+    # Source 1: NewsAPI — using /everything with strict finance query
     if NEWS_API_KEY:
         try:
             ticker_part = query
-            for attempt_query in [
-                f"{ticker_part} stock earnings",
-                f"{ticker_part} shares market",
-                f"{ticker_part}",
+            # Use strict quoted search — asset name + financial term
+            for search_q in [
+                f'"{ticker_part}" stock',
+                f'"{ticker_part}" earnings',
+                f'"{ticker_part}" shares',
             ]:
-                if len(articles) >= 6:
+                if len(articles) >= 5:
                     break
                 url = (
                     f"https://newsapi.org/v2/everything"
-                    f"?q={requests.utils.quote(attempt_query)}"
-                    f"&sortBy=publishedAt&pageSize=20&language=en"
+                    f"?q={requests.utils.quote(search_q)}"
+                    f"&sortBy=publishedAt&pageSize=15&language=en"
                     f"&apiKey={NEWS_API_KEY}"
                 )
                 r = requests.get(url, timeout=8)
                 if r.status_code != 200:
                     continue
-                raw_articles = r.json().get("articles", [])
-                query_lower = ticker_part.lower()
-                for a in raw_articles:
-                    title   = (a.get("title")       or "").strip()
+                data = r.json()
+                raw  = data.get("articles", [])
+                ticker_lower = ticker_part.lower()
+                for a in raw:
+                    title   = (a.get("title") or "").strip()
                     desc    = (a.get("description") or "").strip()
-                    art_url = (a.get("url")         or "")
+                    art_url = (a.get("url") or "")
                     source  = (a.get("source") or {}).get("name", "")
                     if not title or title == "[Removed]":
                         continue
                     title_lower = title.lower()
                     desc_lower  = desc.lower()
                     combined    = title_lower + " " + desc_lower
-                    # Asset name MUST appear in title
-                    if query_lower not in title_lower:
+                    # 1. Asset name MUST be in title
+                    if ticker_lower not in title_lower:
                         continue
-                    # Must have finance signal OR come from finance domain
-                    has_finance      = any(kw in combined for kw in FINANCE_KEYWORDS)
-                    from_fin_domain  = any(d in art_url.lower() for d in FINANCE_SOURCES)
-                    if not has_finance and not from_fin_domain:
+                    # 2. Must contain at least one clear finance/business word
+                    finance_words = [
+                        "stock","share","earn","revenue","profit","loss",
+                        "invest","analyst","market cap","upgrade","downgrade",
+                        "ipo","dividend","buyback","quarter","fiscal","guidance",
+                        "valuation","trading","rally","decline","surge","plunge",
+                        "price target","nse","ngx","sec","billion","million",
+                        "results","forecast","outlook","acquisition","merger"
+                    ]
+                    if not any(fw in combined for fw in finance_words):
                         continue
-                    clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
-                    clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
-                    # Avoid duplicates
+                    # 3. Avoid duplicates
                     if any(ex["title"][:50] == title[:50] for ex in articles):
                         continue
+                    clean_desc = re.sub(r'<[^>]+>', '', desc).strip()[:200]
                     articles.append({
                         "title":     title,
                         "url":       art_url or "#",
                         "published": (a.get("publishedAt") or "")[:10],
                         "source":    source,
                         "sentiment": "",
-                        "desc":      clean_desc[:200],
+                        "desc":      clean_desc,
                     })
                     if len(articles) >= 8:
                         break
-        except Exception as _news_err:
-            print(f"NewsAPI error: {_news_err}")
+        except Exception as e:
+            print(f"NewsAPI error: {e}")
 
     # Source 2: RSS feeds
     for feed_name, feed_url in RSS_FEEDS.items():
