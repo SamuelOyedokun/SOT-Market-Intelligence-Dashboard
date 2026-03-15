@@ -309,17 +309,17 @@ def _keyword_sentiment(text):
     elif ns > ps: return "Negative"
     return "Neutral"
 
-def _ai_sentiment_batch(articles, groq_key):
+def _ai_sentiment_batch(articles, asset_name, groq_key):
     """Use Groq AI to score sentiment for a batch of headlines"""
     if not groq_key or not articles:
         return None
     try:
         headlines = "\n".join([f"{i+1}. {a['title']}" for i, a in enumerate(articles)])
-        prompt = f"""You are a financial market analyst. For each headline below, score the sentiment specifically for {query} as a publicly traded asset.
+        prompt = f"""You are a financial market analyst. For each headline below, score the sentiment specifically for {asset_name} as a publicly traded asset.
 
 Rules:
-- "Positive" = headline suggests {query} stock price will go UP (earnings beat, upgrade, buyback, strong revenue, partnerships, new market entry)
-- "Negative" = headline suggests {query} stock price will go DOWN (earnings miss, downgrade, legal trouble, revenue decline, CEO departure, competition threat)
+- "Positive" = headline suggests {asset_name} stock price will go UP (earnings beat, upgrade, buyback, strong revenue, partnerships, new market entry)
+- "Negative" = headline suggests {asset_name} stock price will go DOWN (earnings miss, downgrade, legal trouble, revenue decline, CEO departure, competition threat)
 - "Neutral"  = product reviews, tech deals, accessories, or headlines with no clear stock price impact
 
 IMPORTANT: Product deals, discounts, gadget reviews, and accessory news = "Neutral" (not stock-relevant).
@@ -328,7 +328,7 @@ Only executive departures, financial results, analyst ratings, and major busines
 Return ONLY a JSON array in the same order, e.g. ["Positive","Negative","Neutral"].
 No explanation, no markdown, just the JSON array.
 
-Asset: {query}
+Asset: {asset_name}
 Headlines:
 {headlines}"""
         r = requests.post(
@@ -422,9 +422,21 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
                     desc  = (a.get("description") or "").strip()
                     if not title or title == "[Removed]":
                         continue
-                    # Relevance filter: title or desc must mention the asset
-                    combined = (title + " " + desc).lower()
-                    if query_lower not in combined:
+                    # Strict relevance: asset name must be in TITLE (not just desc)
+                    # AND article must be from a tech/finance context
+                    title_lower = title.lower()
+                    if query_lower not in title_lower:
+                        continue
+                    # Filter out clearly irrelevant categories
+                    noise_signals = [
+                        "recipe", "festival", "concert", "sports", "basketball",
+                        "football", "baseball", "soccer", "immigration", "supreme court",
+                        "politics", "weather", "celebrity", "music plugin", "audio plugin",
+                        "real estate", "moving to", "tax", "wealth tax", "primary challenger",
+                        "big ten", "march madness", "tournament"
+                    ]
+                    desc_lower = desc.lower()
+                    if any(noise in title_lower or noise in desc_lower for noise in noise_signals):
                         continue
                     clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
                     clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
@@ -488,7 +500,9 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
         ]
 
     # Score sentiment — try AI first, fall back to keywords
-    ai_scores = _ai_sentiment_batch(articles, groq_key) if groq_key else None
+    # Use Groq for AI scoring if available
+    effective_groq_key = groq_key or GROQ_API_KEY
+    ai_scores = _ai_sentiment_batch(articles, query, effective_groq_key) if effective_groq_key else None
     for i, article in enumerate(articles):
         if ai_scores and i < len(ai_scores) and ai_scores[i] in ("Positive","Negative","Neutral"):
             article["sentiment"] = ai_scores[i]
