@@ -401,50 +401,69 @@ def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key 
     """
     articles = []
 
-    # Source 1: NewsAPI — finance-specific query to reduce irrelevant articles
+    # Source 1: NewsAPI — finance/tech whitelist approach
+    FINANCE_SOURCES = [
+        "reuters.com","bloomberg.com","cnbc.com","wsj.com","ft.com",
+        "marketwatch.com","forbes.com","techcrunch.com","theverge.com",
+        "appleinsider.com","9to5mac.com","macrumors.com","arstechnica.com",
+        "businessday.ng","nairametrics.com","seekingalpha.com","benzinga.com",
+        "thestreet.com","investopedia.com","wccftech.com","androidauthority.com",
+    ]
+    FINANCE_KEYWORDS = [
+        "stock","share","earning","revenue","profit","loss","market cap",
+        "invest","analyst","upgrade","downgrade","price target","ipo",
+        "quarterly","dividend","buyback","valuation","trading","rally",
+        "decline","surge","plunge","nse","ngx","sec","fiscal","guidance",
+    ]
     if NEWS_API_KEY:
         try:
-            # Build a focused financial query
-            ticker_part   = query
-            finance_query = f"{ticker_part} stock"
-            url = (
-                f"https://newsapi.org/v2/everything"
-                f"?q={requests.utils.quote(finance_query)}"
-                f"&sortBy=publishedAt&pageSize=20&language=en"
-                f"&apiKey={NEWS_API_KEY}"
-            )
-            r = requests.get(url, timeout=8)
-            if r.status_code == 200:
+            ticker_part = query
+            for attempt_query in [
+                f"{ticker_part} stock earnings",
+                f"{ticker_part} shares market",
+                f"{ticker_part}",
+            ]:
+                if len(articles) >= 6:
+                    break
+                url = (
+                    f"https://newsapi.org/v2/everything"
+                    f"?q={requests.utils.quote(attempt_query)}"
+                    f"&sortBy=publishedAt&pageSize=20&language=en"
+                    f"&apiKey={NEWS_API_KEY}"
+                )
+                r = requests.get(url, timeout=8)
+                if r.status_code != 200:
+                    continue
                 raw_articles = r.json().get("articles", [])
-                query_lower  = ticker_part.lower()
+                query_lower = ticker_part.lower()
                 for a in raw_articles:
-                    title = (a.get("title") or "").strip()
-                    desc  = (a.get("description") or "").strip()
+                    title   = (a.get("title")       or "").strip()
+                    desc    = (a.get("description") or "").strip()
+                    art_url = (a.get("url")         or "")
+                    source  = (a.get("source") or {}).get("name", "")
                     if not title or title == "[Removed]":
                         continue
-                    # Strict relevance: asset name must be in TITLE (not just desc)
-                    # AND article must be from a tech/finance context
                     title_lower = title.lower()
+                    desc_lower  = desc.lower()
+                    combined    = title_lower + " " + desc_lower
+                    # Asset name MUST appear in title
                     if query_lower not in title_lower:
                         continue
-                    # Filter out clearly irrelevant categories
-                    noise_signals = [
-                        "recipe", "festival", "concert", "sports", "basketball",
-                        "football", "baseball", "soccer", "immigration", "supreme court",
-                        "politics", "weather", "celebrity", "music plugin", "audio plugin",
-                        "real estate", "moving to", "tax", "wealth tax", "primary challenger",
-                        "big ten", "march madness", "tournament"
-                    ]
-                    desc_lower = desc.lower()
-                    if any(noise in title_lower or noise in desc_lower for noise in noise_signals):
+                    # Must have finance signal OR come from finance domain
+                    has_finance      = any(kw in combined for kw in FINANCE_KEYWORDS)
+                    from_fin_domain  = any(d in art_url.lower() for d in FINANCE_SOURCES)
+                    if not has_finance and not from_fin_domain:
                         continue
                     clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
                     clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
+                    # Avoid duplicates
+                    if any(ex["title"][:50] == title[:50] for ex in articles):
+                        continue
                     articles.append({
                         "title":     title,
-                        "url":       a.get("url", "#"),
+                        "url":       art_url or "#",
                         "published": (a.get("publishedAt") or "")[:10],
-                        "source":    a.get("source", {}).get("name", "NewsAPI"),
+                        "source":    source,
                         "sentiment": "",
                         "desc":      clean_desc[:200],
                     })
