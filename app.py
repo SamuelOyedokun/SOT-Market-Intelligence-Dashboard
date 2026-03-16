@@ -412,9 +412,10 @@ def _fetch_rss(feed_url, asset_name, max_items=5):
             if feed_is_general and not in_title:
                 continue
             # Clean description
-            import re as _re
-            clean = _re.sub(r'<[^>]+>', '', desc).strip()
-            clean = _re.sub(r'\s+', ' ', clean)[:200]
+            import re as _re, html as _html
+            clean = _re.sub(r'<[^>]+>', ' ', desc)
+            clean = _html.unescape(clean)
+            clean = _re.sub(r'\s+', ' ', clean).strip()[:200]
             # Parse date
             try:
                 from email.utils import parsedate_to_datetime
@@ -445,17 +446,17 @@ def get_news_sentiment(query, ticker="", groq_key=""):
     ]
     is_ngx = any(n in query.lower() for n in ngx_names)
 
-    # For NGX stocks — use Nigerian sources first
+    # For NGX stocks — use Nigerian and African financial sources first
     if is_ngx:
-        ngx_priority_feeds = {
-            "Nairametrics":    FINANCE_RSS.get("Nairametrics", ""),
-            "BusinessDay NG":  FINANCE_RSS.get("BusinessDay NG", ""),
-            "Reuters Business":FINANCE_RSS.get("Reuters Business", ""),
-            "Yahoo Finance":   FINANCE_RSS.get("Yahoo Finance", ""),
+        ngx_feeds = {
+            "Nairametrics":       "https://nairametrics.com/feed/",
+            "BusinessDay NG":     "https://businessday.ng/feed/",
+            "Punch Business":     "https://punchng.com/topic/business/feed/",
+            "Vanguard Business":  "https://www.vanguardngr.com/category/business/feed/",
+            "Reuters Business":   "https://feeds.reuters.com/reuters/businessNews",
+            "Yahoo Finance":      "https://finance.yahoo.com/news/rssindex",
         }
-        for feed_name, feed_url in ngx_priority_feeds.items():
-            if not feed_url:
-                continue
+        for feed_name, feed_url in ngx_feeds.items():
             items = _fetch_rss(feed_url, query, max_items=6)
             for item in items:
                 item["source"] = feed_name
@@ -464,9 +465,14 @@ def get_news_sentiment(query, ticker="", groq_key=""):
             if len(articles) >= 8:
                 break
 
-    # For all other assets — use full feed list
+    # For all other assets — use feed list appropriate to asset type
+    apple_only_feeds = ["9to5Mac", "MacRumors", "AppleInsider"]
     if not is_ngx or len(articles) < 3:
         for feed_name, feed_url in FINANCE_RSS.items():
+            # Skip Apple-specific feeds for non-Apple assets
+            is_apple_asset = any(t in query.lower() for t in ["apple", "aapl", "iphone", "ipad"])
+            if feed_name in apple_only_feeds and not is_apple_asset:
+                continue
             items = _fetch_rss(feed_url, query, max_items=5)
             for item in items:
                 item["source"] = feed_name
@@ -1257,9 +1263,11 @@ with tab3:
         url   = article.get("url","#")
         link  = f"<a href='{url}' target='_blank' style='color:#1b4fd8; font-size:11px; text-decoration:none;'>Read full article →</a>" if url != "#" else ""
         desc  = article.get("desc","")
-        # Strip HTML tags from RSS descriptions before rendering
-        import re as _re
-        desc  = _re.sub(r'<[^>]+>', '', desc).strip()[:200]
+        # Aggressively strip all HTML, entities, and whitespace
+        import re as _re, html as _html
+        desc  = _re.sub(r'<[^>]+>', ' ', desc)
+        desc  = _html.unescape(desc)
+        desc  = _re.sub(r'\s+', ' ', desc).strip()[:200]
         desc_html = f"<div style='color:#8892a4; font-size:12px; margin-top:6px; line-height:1.5;'>{desc}</div>" if desc else ""
 
         st.markdown(f"""
