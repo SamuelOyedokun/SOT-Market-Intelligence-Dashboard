@@ -277,206 +277,153 @@ def get_live_price(ticker):
         return {"price": 0, "change": 0, "change_pct": 0, "volume": 0, "high": 0, "low": 0}
 
 
-# ── RSS FEED SOURCES ──
-# Finance-only RSS feeds — these are reliable and don't return irrelevant content
-RSS_FEEDS = {
+# ── NEWS MODULE — RSS ONLY (v_FINAL) ──
+# NewsAPI free tier is unreliable — returns random articles ignoring search queries.
+# Using curated finance RSS feeds only for reliable, relevant results.
+
+FINANCE_RSS = {
     "Reuters Business":    "https://feeds.reuters.com/reuters/businessNews",
     "Reuters Technology":  "https://feeds.reuters.com/reuters/technologyNews",
     "MarketWatch":         "https://feeds.marketwatch.com/marketwatch/topstories",
     "Yahoo Finance":       "https://finance.yahoo.com/news/rssindex",
-    "CNBC Finance":        "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
+    "CNBC":                "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
     "Nairametrics":        "https://nairametrics.com/feed/",
-    "BusinessDay Nigeria": "https://businessday.ng/feed/",
-    "Seeking Alpha":       "https://seekingalpha.com/market_currents.xml",
+    "BusinessDay NG":      "https://businessday.ng/feed/",
     "9to5Mac":             "https://9to5mac.com/feed/",
     "MacRumors":           "https://feeds.macrumors.com/MacRumors-All",
     "AppleInsider":        "https://appleinsider.com/rss/news/",
+    "TechCrunch":          "https://techcrunch.com/feed/",
+    "The Verge":           "https://www.theverge.com/rss/index.xml",
 }
 
+# Keep old name for compatibility
+RSS_FEEDS = FINANCE_RSS
+
 def _keyword_sentiment(text):
-    """Finance-specific keyword sentiment scoring"""
-    pos = ["surge","rally","gain","rise","bull","profit","growth","beat","high",
-           "strong","record","breakthrough","upgrade","buy","outperform","boost",
-           "revenue","earnings beat","raised guidance","dividend","acquisition",
-           "partnership","launch","approval","expansion","recovery","rebound"]
-    neg = ["crash","fall","drop","bear","loss","down","decline","miss","risk",
-           "weak","cut","downgrade","sell","concern","warning","slump","recall",
-           "investigation","lawsuit","fine","penalty","layoff","bankruptcy",
-           "missed expectations","lowered guidance","debt","fraud","scandal"]
-    # Irrelevant signals — if only these match, mark neutral
-    irrelevant = ["recipe","festival","concert","sports","weather","celebrity",
-                  "entertainment","movie","music","food","travel","fashion"]
-    t  = text.lower()
-    if any(w in t for w in irrelevant) and not any(w in t for w in pos + neg):
-        return "Neutral"
+    t = text.lower()
+    pos = ["surge","rally","gain","rise","bull","profit","growth","beat","record",
+           "upgrade","outperform","revenue","dividend","acquisition","expansion",
+           "partnership","approval","recovery","rebound","raised guidance","strong"]
+    neg = ["crash","fall","drop","bear","loss","decline","miss","risk","weak","cut",
+           "downgrade","concern","warning","slump","recall","lawsuit","fine","fraud",
+           "layoff","bankruptcy","lowered guidance","missed expectations","scandal"]
     ps = sum(1 for w in pos if w in t)
     ns = sum(1 for w in neg if w in t)
-    if ps > ns:   return "Positive"
-    elif ns > ps: return "Negative"
-    return "Neutral"
+    return "Positive" if ps > ns else "Negative" if ns > ps else "Neutral"
 
-def _ai_sentiment_batch(articles, asset_name, groq_key):
-    """Use Groq AI to score sentiment for a batch of headlines"""
+def _ai_score(articles, asset_name, groq_key):
     if not groq_key or not articles:
         return None
     try:
         headlines = "\n".join([f"{i+1}. {a['title']}" for i, a in enumerate(articles)])
-        prompt = f"""You are a financial market analyst. For each headline below, score the sentiment specifically for {asset_name} as a publicly traded asset.
-
-Rules:
-- "Positive" = headline suggests {asset_name} stock price will go UP (earnings beat, upgrade, buyback, strong revenue, partnerships, new market entry)
-- "Negative" = headline suggests {asset_name} stock price will go DOWN (earnings miss, downgrade, legal trouble, revenue decline, CEO departure, competition threat)
-- "Neutral"  = product reviews, tech deals, accessories, or headlines with no clear stock price impact
-
-IMPORTANT: Product deals, discounts, gadget reviews, and accessory news = "Neutral" (not stock-relevant).
-Only executive departures, financial results, analyst ratings, and major business events affect stock price.
-
-Return ONLY a JSON array in the same order, e.g. ["Positive","Negative","Neutral"].
-No explanation, no markdown, just the JSON array.
-
+        prompt = f"""Score each headline's financial sentiment for {asset_name} stock.
+Positive = good for stock price. Negative = bad for stock price. Neutral = no clear impact.
+Return ONLY a JSON array like ["Positive","Neutral","Negative"]. No explanation.
 Asset: {asset_name}
-Headlines:
 {headlines}"""
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "max_tokens": 200, "temperature": 0,
+            json={"model": "llama-3.3-70b-versatile", "max_tokens": 150, "temperature": 0,
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=15
         )
-        raw  = r.json()["choices"][0]["message"]["content"].strip()
-        raw  = raw.replace("```json","").replace("```","").strip()
+        raw = r.json()["choices"][0]["message"]["content"].strip()
+        raw = raw.replace("```json","").replace("```","").strip()
         scores = json.loads(raw)
         if isinstance(scores, list) and len(scores) == len(articles):
             return scores
-    except:
-        pass
+    except Exception as e:
+        print(f"Groq scoring error: {e}")
     return None
 
-def _fetch_rss(feed_url, query, max_items=5):
-    """Fetch and filter RSS feed articles matching query"""
+def _fetch_rss(feed_url, asset_name, max_items=5):
+    """Fetch RSS feed and return only articles relevant to asset_name"""
     results = []
     try:
-        hdrs = {"User-Agent": "Mozilla/5.0 (compatible; SOTDashboard/1.0)"}
-        r    = requests.get(feed_url, headers=hdrs, timeout=8)
+        r = requests.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
         if r.status_code != 200:
             return []
         from xml.etree import ElementTree as ET
         root  = ET.fromstring(r.content)
         items = root.findall(".//item")
-        query_terms = query.lower().split()
+        name_lower = asset_name.lower()
+        # Also match common abbreviations
+        aliases = {
+            "apple": ["apple", "aapl", "iphone", "ipad", "macbook", "macos", "ios"],
+            "microsoft": ["microsoft", "msft", "windows", "azure", "office"],
+            "google": ["google", "googl", "alphabet", "android", "youtube"],
+            "amazon": ["amazon", "amzn", "aws"],
+            "tesla": ["tesla", "tsla", "elon musk"],
+            "nvidia": ["nvidia", "nvda"],
+            "bitcoin": ["bitcoin", "btc", "crypto"],
+            "ethereum": ["ethereum", "eth"],
+        }
+        search_terms = aliases.get(name_lower, [name_lower])
+
         for item in items:
-            title   = (item.findtext("title")       or "").strip()
-            link    = (item.findtext("link")         or "#").strip()
-            pubdate = (item.findtext("pubDate")      or "").strip()
-            desc    = (item.findtext("description")  or "").strip()
-            combined = (title + " " + desc).lower()
-            # Require the main asset name to appear (not just any term)
-            main_term = query_terms[0] if query_terms else ""
-            # Require asset name in title AND at least one finance word
-            rss_finance = ["stock","share","earn","revenue","profit","loss",
-                          "market","invest","analyst","quarter","fiscal","trading",
-                          "billion","million","nse","ngx","upgrade","downgrade"]
-            title_has_asset   = main_term and main_term in title.lower()
-            content_has_finance = any(fw in combined for fw in rss_finance)
-            if title_has_asset and content_has_finance:
-                # Parse date
-                try:
-                    from email.utils import parsedate_to_datetime
-                    pub = parsedate_to_datetime(pubdate).strftime("%Y-%m-%d")
-                except:
-                    pub = datetime.now().strftime("%Y-%m-%d")
-                # Strip HTML tags from description
-                clean_desc = re.sub(r'<[^>]+>', '', desc).strip()
-                clean_desc = re.sub(r'\s+', ' ', clean_desc).strip()
-                results.append({
-                    "title":     title,
-                    "url":       link,
-                    "published": pub,
-                    "source":    "",   # filled by caller
-                    "sentiment": "",   # filled later
-                    "desc":      clean_desc[:200],
-                })
-                if len(results) >= max_items:
-                    break
-    except:
-        pass
+            title = (item.findtext("title") or "").strip()
+            desc  = (item.findtext("description") or "").strip()
+            link  = (item.findtext("link") or "#").strip()
+            pub   = (item.findtext("pubDate") or "").strip()
+            title_lower = title.lower()
+            desc_lower  = desc.lower()
+            # Asset name or alias MUST appear in title
+            if not any(term in title_lower for term in search_terms):
+                continue
+            # Clean description
+            import re as _re
+            clean = _re.sub(r'<[^>]+>', '', desc).strip()
+            clean = _re.sub(r'\s+', ' ', clean)[:200]
+            # Parse date
+            try:
+                from email.utils import parsedate_to_datetime
+                pub_fmt = parsedate_to_datetime(pub).strftime("%Y-%m-%d")
+            except:
+                pub_fmt = datetime.now().strftime("%Y-%m-%d")
+            results.append({
+                "title": title, "url": link,
+                "published": pub_fmt, "source": "",
+                "sentiment": "", "desc": clean,
+            })
+            if len(results) >= max_items:
+                break
+    except Exception as e:
+        print(f"RSS error {feed_url}: {e}")
     return results
 
-def get_news_sentiment(query, ticker="", groq_key=""):  # No cache — Groq key must be fresh each call
-    """
-    Multi-source news + AI sentiment:
-    1. NewsAPI (if key available)
-    2. RSS feeds (Reuters, BBC, MarketWatch, Yahoo Finance, Nairametrics, BusinessDay)
-    3. AI sentiment scoring via Groq
-    4. Keyword fallback if AI unavailable
-    """
+def get_news_sentiment(query, ticker="", groq_key=""):
+    """Fetch finance news via RSS only — v_FINAL"""
     articles = []
-
-    # Source 1: NewsAPI DISABLED — free tier ignores search operators
-    # and returns irrelevant cached results regardless of query.
-    # Using RSS feeds from finance sources instead (more reliable).
-
-    # Source 2: RSS feeds
-    for feed_name, feed_url in RSS_FEEDS.items():
-        rss_items = _fetch_rss(feed_url, query, max_items=5)
-        for item in rss_items:
+    for feed_name, feed_url in FINANCE_RSS.items():
+        items = _fetch_rss(feed_url, query, max_items=5)
+        for item in items:
             item["source"] = feed_name
-            articles.append(item)
-        if len(articles) >= 15:
+            # Avoid duplicates
+            if not any(ex["title"][:50] == item["title"][:50] for ex in articles):
+                articles.append(item)
+        if len(articles) >= 12:
             break
 
-    # Deduplicate by title similarity
-    seen   = set()
-    unique = []
-    for a in articles:
-        key = a["title"][:60].lower()
-        if key not in seen:
-            seen.add(key)
-            unique.append(a)
-    articles = unique[:12]
-
-    # Last resort: try NewsAPI with just the asset name, no relevance filter
-    if not articles and NEWS_API_KEY:
-        try:
-            url = f"https://newsapi.org/v2/everything?q={requests.utils.quote(query)}&sortBy=publishedAt&pageSize=8&language=en&apiKey={NEWS_API_KEY}"
-            r   = requests.get(url, timeout=8)
-            if r.status_code == 200:
-                for a in r.json().get("articles", [])[:8]:
-                    title = (a.get("title") or "").strip()
-                    if not title or title == "[Removed]":
-                        continue
-                    articles.append({
-                        "title":     title,
-                        "url":       a.get("url", "#"),
-                        "published": (a.get("publishedAt") or "")[:10],
-                        "source":    a.get("source", {}).get("name", "NewsAPI"),
-                        "sentiment": "",
-                        "desc":      (a.get("description") or "")[:200],
-                    })
-        except Exception as e:
-            print(f"NewsAPI fallback error: {e}")
-
     if not articles:
-        # Final fallback — clearly labeled as demo
-        return [
-            {"title": f"{query}: No finance news found right now. This may be a weekend or market holiday. Check back during trading hours.", "source": "Demo", "url": "#", "published": datetime.now().strftime("%Y-%m-%d"), "sentiment": "Neutral", "desc": ""},
-        ]
+        return [{
+            "title": f"No recent news found for {query}. Try checking during market hours.",
+            "source": "System", "url": "#",
+            "published": datetime.now().strftime("%Y-%m-%d"),
+            "sentiment": "Neutral", "desc": "", "scored_by": "System"
+        }]
 
-    # Score sentiment — try AI first, fall back to keywords
-    # Use Groq for AI scoring if available
-    effective_groq_key = groq_key or GROQ_API_KEY
-    ai_scores = _ai_sentiment_batch(articles, query, effective_groq_key) if effective_groq_key else None
+    # Score with Groq AI, fall back to keywords
+    effective_key = groq_key or GROQ_API_KEY
+    ai_scores = _ai_score(articles, query, effective_key)
     for i, article in enumerate(articles):
         if ai_scores and i < len(ai_scores) and ai_scores[i] in ("Positive","Negative","Neutral"):
-            article["sentiment"] = ai_scores[i]
-            article["scored_by"] = "AI"
+            article["sentiment"]  = ai_scores[i]
+            article["scored_by"]  = "AI"
         else:
-            article["sentiment"] = _keyword_sentiment(article["title"] + " " + article.get("desc",""))
-            article["scored_by"] = "Keywords"
-
-    return articles
-
+            article["sentiment"]  = _keyword_sentiment(article["title"] + " " + article.get("desc",""))
+            article["scored_by"]  = "Keywords"
+    return articles[:12]
 
 def compute_indicators(df):
     """Add technical indicators"""
@@ -1139,7 +1086,7 @@ with tab3:
         - **Articles found:** `{len(news)}`
         - **All sources:** `{all_sources}`
         - **First title:** `{news[0]['title'][:80] if news else 'None'}`
-        - **Filter version:** `v5 — whitelist mode`
+        - **Filter version:** `v_FINAL — RSS only, no NewsAPI`
         """)
         if st.button('🔄 Force refresh news', key='clear_news_cache'):
             st.cache_data.clear()
