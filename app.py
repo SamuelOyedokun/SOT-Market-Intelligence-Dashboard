@@ -286,7 +286,6 @@ FINANCE_RSS = {
     "Reuters Technology":  "https://feeds.reuters.com/reuters/technologyNews",
     "MarketWatch":         "https://feeds.marketwatch.com/marketwatch/topstories",
     "Yahoo Finance":       "https://finance.yahoo.com/news/rssindex",
-    "CNBC":                "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=15839069",
     "Nairametrics":        "https://nairametrics.com/feed/",
     "BusinessDay NG":      "https://businessday.ng/feed/",
     "9to5Mac":             "https://9to5mac.com/feed/",
@@ -294,6 +293,7 @@ FINANCE_RSS = {
     "AppleInsider":        "https://appleinsider.com/rss/news/",
     "TechCrunch":          "https://techcrunch.com/feed/",
     "The Verge":           "https://www.theverge.com/rss/index.xml",
+    "Seeking Alpha":       "https://seekingalpha.com/market_currents.xml",
 }
 
 # Keep old name for compatibility
