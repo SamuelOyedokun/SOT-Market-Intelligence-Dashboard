@@ -312,30 +312,40 @@ def _keyword_sentiment(text):
     return "Positive" if ps > ns else "Negative" if ns > ps else "Neutral"
 
 def _ai_score(articles, asset_name, groq_key):
+    """Score articles in batches of 6 to respect token limits"""
     if not groq_key or not articles:
         return None
-    try:
-        headlines = "\n".join([f"{i+1}. {a['title']}" for i, a in enumerate(articles)])
-        prompt = f"""Score each headline's financial sentiment for {asset_name} stock.
-Positive = good for stock price. Negative = bad for stock price. Neutral = no clear impact.
-Return ONLY a JSON array like ["Positive","Neutral","Negative"]. No explanation.
+    all_scores = []
+    batch_size = 6
+    for i in range(0, len(articles), batch_size):
+        batch = articles[i:i+batch_size]
+        try:
+            headlines = "\n".join([f"{j+1}. {a['title']}" for j, a in enumerate(batch)])
+            prompt = f"""Score each headline for {asset_name} stock price impact.
+Rules: Positive=good for stock, Negative=bad for stock, Neutral=no clear impact or product news.
+Return ONLY a JSON array, same length as headlines. Example: ["Positive","Neutral","Negative"]
+No explanation, no markdown.
 Asset: {asset_name}
+Headlines:
 {headlines}"""
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-            json={"model": "llama-3.3-70b-versatile", "max_tokens": 150, "temperature": 0,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=15
-        )
-        raw = r.json()["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json","").replace("```","").strip()
-        scores = json.loads(raw)
-        if isinstance(scores, list) and len(scores) == len(articles):
-            return scores
-    except Exception as e:
-        print(f"Groq scoring error: {e}")
-    return None
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
+                json={"model": "llama-3.3-70b-versatile", "max_tokens": 200, "temperature": 0,
+                      "messages": [{"role": "user", "content": prompt}]},
+                timeout=15
+            )
+            raw = r.json()["choices"][0]["message"]["content"].strip()
+            raw = raw.replace("```json","").replace("```","").strip()
+            scores = json.loads(raw)
+            if isinstance(scores, list) and len(scores) == len(batch):
+                all_scores.extend(scores)
+            else:
+                all_scores.extend(["Neutral"] * len(batch))
+        except Exception as e:
+            print(f"Groq batch error: {e}")
+            all_scores.extend(["Neutral"] * len(batch))
+    return all_scores if len(all_scores) == len(articles) else None
 
 def _fetch_rss(feed_url, asset_name, max_items=5):
     """Fetch RSS feed and return only articles relevant to asset_name"""
