@@ -360,14 +360,37 @@ def _fetch_rss(feed_url, asset_name, max_items=5):
         name_lower = asset_name.lower()
         # Also match common abbreviations
         aliases = {
+            # US Stocks
             "apple": ["apple", "aapl", "iphone", "ipad", "macbook", "macos", "ios"],
             "microsoft": ["microsoft", "msft", "windows", "azure", "office"],
             "google": ["google", "googl", "alphabet", "android", "youtube"],
             "amazon": ["amazon", "amzn", "aws"],
             "tesla": ["tesla", "tsla", "elon musk"],
             "nvidia": ["nvidia", "nvda"],
+            # Crypto
             "bitcoin": ["bitcoin", "btc", "crypto"],
             "ethereum": ["ethereum", "eth"],
+            "binance coin": ["binance", "bnb"],
+            "solana": ["solana", "sol"],
+            "xrp": ["xrp", "ripple"],
+            # NGX Stocks — common name variations used in Nigerian media
+            "gtbank (gtco)": ["gtco", "gtbank", "guaranty trust"],
+            "zenith bank": ["zenith bank", "zenith"],
+            "mtn nigeria": ["mtn nigeria", "mtn", "mtnn"],
+            "dangote cement": ["dangote cement", "dangote", "dangcem"],
+            "access bank": ["access bank", "access corp", "accessco"],
+            "fbn holdings": ["fbn", "first bank", "firstbank"],
+            "uba": ["uba", "united bank for africa"],
+            "stanbic ibtc": ["stanbic", "stanbic ibtc"],
+            "nestle nigeria": ["nestle nigeria", "nestle"],
+            "airtel africa": ["airtel africa", "airtel"],
+            "seplat energy": ["seplat"],
+            "bua cement": ["bua cement", "bua"],
+            "bua foods": ["bua foods"],
+            "lafarge africa": ["lafarge", "wapco"],
+            "flour mills": ["flour mills"],
+            "fidelity bank": ["fidelity bank"],
+            "transcorp": ["transcorp", "transnational"],
         }
         search_terms = aliases.get(name_lower, [name_lower])
 
@@ -378,8 +401,15 @@ def _fetch_rss(feed_url, asset_name, max_items=5):
             pub   = (item.findtext("pubDate") or "").strip()
             title_lower = title.lower()
             desc_lower  = desc.lower()
-            # Asset name or alias MUST appear in title
-            if not any(term in title_lower for term in search_terms):
+            # Asset name MUST appear in title OR (desc for NGX stocks)
+            in_title = any(term in title_lower for term in search_terms)
+            in_desc  = any(term in desc_lower  for term in search_terms)
+            if not in_title and not in_desc:
+                continue
+            # For general feeds, require it in title to avoid noise
+            general_feeds = ["yahoo finance", "reuters", "marketwatch", "techcrunch", "the verge", "seeking alpha"]
+            feed_is_general = any(gf in feed_url.lower() for gf in ["yahoo", "reuters", "marketwatch", "techcrunch", "theverge", "seekingalpha"])
+            if feed_is_general and not in_title:
                 continue
             # Clean description
             import re as _re
@@ -405,15 +435,45 @@ def _fetch_rss(feed_url, asset_name, max_items=5):
 def get_news_sentiment(query, ticker="", groq_key=""):
     """Fetch finance news via RSS only — v_FINAL"""
     articles = []
-    for feed_name, feed_url in FINANCE_RSS.items():
-        items = _fetch_rss(feed_url, query, max_items=5)
-        for item in items:
-            item["source"] = feed_name
-            # Avoid duplicates
-            if not any(ex["title"][:50] == item["title"][:50] for ex in articles):
-                articles.append(item)
-        if len(articles) >= 12:
-            break
+
+    # Detect NGX stocks and prioritize Nigerian news sources
+    ngx_names = [
+        "gtbank", "gtco", "zenith", "mtn", "dangote", "access bank",
+        "fbn", "uba", "stanbic", "nestle nigeria", "airtel africa",
+        "seplat", "bua", "lafarge", "flour mills", "fidelity bank",
+        "transcorp", "sterling bank", "okomu"
+    ]
+    is_ngx = any(n in query.lower() for n in ngx_names)
+
+    # For NGX stocks — use Nigerian sources first
+    if is_ngx:
+        ngx_priority_feeds = {
+            "Nairametrics":    FINANCE_RSS.get("Nairametrics", ""),
+            "BusinessDay NG":  FINANCE_RSS.get("BusinessDay NG", ""),
+            "Reuters Business":FINANCE_RSS.get("Reuters Business", ""),
+            "Yahoo Finance":   FINANCE_RSS.get("Yahoo Finance", ""),
+        }
+        for feed_name, feed_url in ngx_priority_feeds.items():
+            if not feed_url:
+                continue
+            items = _fetch_rss(feed_url, query, max_items=6)
+            for item in items:
+                item["source"] = feed_name
+                if not any(ex["title"][:50] == item["title"][:50] for ex in articles):
+                    articles.append(item)
+            if len(articles) >= 8:
+                break
+
+    # For all other assets — use full feed list
+    if not is_ngx or len(articles) < 3:
+        for feed_name, feed_url in FINANCE_RSS.items():
+            items = _fetch_rss(feed_url, query, max_items=5)
+            for item in items:
+                item["source"] = feed_name
+                if not any(ex["title"][:50] == item["title"][:50] for ex in articles):
+                    articles.append(item)
+            if len(articles) >= 12:
+                break
 
     if not articles:
         return [{
