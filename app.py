@@ -1087,32 +1087,6 @@ with tab3:
     with st.spinner("🔍 Fetching news from multiple sources..."):
         news = get_news_sentiment(selected_name, selected_ticker, GROQ_API_KEY)
 
-    # Debug expander — helps diagnose issues
-    with st.expander('🔧 Debug Info (expand if news not loading)'):
-        all_sources = list(set(a.get('source','?') for a in news))
-        st.markdown(f"""
-        - **NewsAPI Key:** `{'✅ ' + NEWS_API_KEY[:8] + '...' if NEWS_API_KEY else '❌ Not set'}`
-        - **Groq Key:** `{'✅ Set' if GROQ_API_KEY else '❌ Not set'}`
-        - **Articles found:** `{len(news)}`
-        - **All sources:** `{all_sources}`
-        - **First title:** `{news[0]['title'][:80] if news else 'None'}`
-        - **Filter version:** `v_FINAL — RSS only, no NewsAPI`
-        """)
-        if st.button('🔄 Force refresh news', key='clear_news_cache'):
-            st.cache_data.clear()
-
-    # Data sources info
-    sources_used = list(set(a["source"] for a in news if a.get("source")))
-    ai_scored    = sum(1 for a in news if a.get("scored_by") == "AI")
-    st.markdown(f"""
-    <div style='background:#141928; border:1px solid #2a3350; border-radius:8px;
-         padding:10px 16px; margin-bottom:16px; font-size:12px; color:#8892a4;'>
-        📡 <strong style='color:white;'>Sources:</strong> {", ".join(sources_used) if sources_used else "Demo"} &nbsp;·&nbsp;
-        🤖 <strong style='color:white;'>{ai_scored}/{len(news)}</strong> articles scored by AI &nbsp;·&nbsp;
-        📰 <strong style='color:white;'>{len(news)}</strong> relevant articles &nbsp;·&nbsp;
-        🎯 <strong style='color:#00d4aa;'>Finance-filtered</strong>
-    </div>""", unsafe_allow_html=True)
-
     # Sentiment counts
     sentiments = [n["sentiment"] for n in news]
     pos_count  = sentiments.count("Positive")
