@@ -5,3 +5,6 @@ plotly
 yfinance
 requests
 pillow
+scikit-learn
+beautifulsoup4
+lxml
