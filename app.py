@@ -1879,9 +1879,20 @@ with tab7:
         ))
 
         # Vertical divider at today
-        fig_fc.add_vline(x=str(dates_hist[-1])[:10], line_dash="dash",
-                          line_color="#8892a4", opacity=0.5, annotation_text="Today",
-                          annotation_font_color="#8892a4")
+        # Add "Today" marker as a shape instead of vline (Plotly compatibility fix)
+        today_x = str(dates_hist[-1])[:10]
+        fig_fc.add_shape(type="line",
+            x0=today_x, x1=today_x, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color="#8892a4", width=1, dash="dash"),
+            opacity=0.5
+        )
+        fig_fc.add_annotation(
+            x=today_x, y=1, xref="x", yref="paper",
+            text="Today", showarrow=False,
+            font=dict(color="#8892a4", size=11),
+            yanchor="bottom"
+        )
 
         # ML forecast
         if ml_preds is not None:
