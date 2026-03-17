@@ -1718,9 +1718,13 @@ with tab6:
 
 # ── TAB 7: MARKET FORECAST ──
 with tab7:
-    import re as _re2
-    from sklearn.linear_model import LinearRegression
-    from sklearn.preprocessing import MinMaxScaler
+    try:
+        from sklearn.linear_model import LinearRegression
+        from sklearn.preprocessing import MinMaxScaler
+        sklearn_available = True
+    except ImportError:
+        sklearn_available = False
+        st.warning("scikit-learn not installed. ML forecasting unavailable. MA forecasting still works.")
 
     st.markdown("<div class='section-header'>🔮 Market Forecast</div>", unsafe_allow_html=True)
     st.markdown("<small style='color:#8892a4;'>Price forecasting using Machine Learning & Moving Average Projection · For informational purposes only · Not financial advice</small>", unsafe_allow_html=True)
@@ -1759,9 +1763,10 @@ with tab7:
     else:
         hist_df, _ = get_stock_data(selected_ticker, "1y", "1d")
 
-    if hist_df is None or hist_df.empty or len(hist_df) < 30:
+    try:
+      if hist_df is None or hist_df.empty or len(hist_df) < 30:
         st.warning("Not enough historical data to generate a forecast. Try a different asset or time period.")
-    else:
+      else:
         close = hist_df["Close"].dropna().values
         dates_hist = hist_df.index[-len(close):]
 
@@ -1792,6 +1797,8 @@ with tab7:
         # ── ML FORECAST ──
         def ml_forecast(prices, n_forecast):
             """Linear Regression on time index with lag features"""
+            if not sklearn_available:
+                return None
             n = len(prices)
             # Features: time index + lag1 + lag2 + lag5 + rolling mean
             X, y = [], []
@@ -2031,6 +2038,10 @@ with tab7:
             Always conduct your own research and consult a qualified financial advisor.
         </div>
         """, unsafe_allow_html=True)
+    except Exception as _fc_err:
+        st.error(f"Forecast error: {str(_fc_err)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 
 # ── FOOTER ──
