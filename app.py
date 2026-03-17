@@ -1904,7 +1904,7 @@ with tab7:
                 marker=dict(size=4)
             ))
             if confidence_band:
-                vol_daily = np.std(np.diff(close[-60:]) / close[-61:-1]) if len(close) >= 61 else 0.015
+                vol_daily = np.std(np.diff(close[-60:]) / close[-60:-1]) if len(close) >= 61 else 0.015
                 upper = ml_preds * (1 + vol_daily * np.sqrt(np.arange(1, forecast_days+1)))
                 lower = ml_preds * (1 - vol_daily * np.sqrt(np.arange(1, forecast_days+1)))
                 fig_fc.add_trace(go.Scatter(
@@ -1925,7 +1925,7 @@ with tab7:
                 marker=dict(size=4)
             ))
             if confidence_band:
-                vol_daily = np.std(np.diff(close[-60:]) / close[-61:-1]) if len(close) >= 61 else 0.015
+                vol_daily = np.std(np.diff(close[-60:]) / close[-60:-1]) if len(close) >= 61 else 0.015
                 upper_ma = ma_preds * (1 + vol_daily * 1.5 * np.sqrt(np.arange(1, forecast_days+1)))
                 lower_ma = ma_preds * (1 - vol_daily * 1.5 * np.sqrt(np.arange(1, forecast_days+1)))
                 fig_fc.add_trace(go.Scatter(
