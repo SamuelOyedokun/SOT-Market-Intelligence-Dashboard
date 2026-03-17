@@ -798,7 +798,7 @@ if "alerts" in st.session_state and st.session_state.alerts:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABS ──
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview", "🤖 AI Market Insights", "🔔 Price Alerts"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["📊 Chart & Analysis", "💼 Portfolio Tracker", "📰 News & Sentiment", "🏆 Market Overview", "🤖 AI Market Insights", "🔔 Price Alerts", "🔮 Market Forecast"])
 
 # ── TAB 1: CHART ──
 with tab1:
@@ -1714,6 +1714,313 @@ with tab6:
             "Created": a.get("created",""),
         } for a in fired_alerts])
         st.dataframe(df_fired, use_container_width=True, hide_index=True)
+
+
+# ── TAB 7: MARKET FORECAST ──
+with tab7:
+    import re as _re2
+    from sklearn.linear_model import LinearRegression
+    from sklearn.preprocessing import MinMaxScaler
+
+    st.markdown("<div class='section-header'>🔮 Market Forecast</div>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Price forecasting using Machine Learning & Moving Average Projection · For informational purposes only · Not financial advice</small>", unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── FORECAST SETTINGS ──
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        forecast_days = st.selectbox("📅 Forecast Horizon", [7, 14, 30, 60, 90], index=1,
+            format_func=lambda x: f"{x} days ahead", key="forecast_days")
+    with fc2:
+        forecast_method = st.selectbox("🔧 Method", [
+            "Both (ML + MA)", "Machine Learning Only", "Moving Average Only"
+        ], key="forecast_method")
+    with fc3:
+        confidence_band = st.checkbox("Show Confidence Band", value=True, key="conf_band")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── FETCH DATA ──
+    ngx_syms = list(NGX_SYMBOLS.values())
+    if selected_ticker in ngx_syms:
+        try:
+            ngx_px, _, _ = fetch_ngx_prices()
+            hist_df = get_ngx_history(selected_ticker, ngx_px, "1y")
+        except:
+            hist_df = pd.DataFrame()
+        if hist_df is None or hist_df.empty:
+            base = NGX_LAST_KNOWN.get(selected_ticker, {}).get("price", 100)
+            days_sim = 252
+            dates_sim = pd.date_range(end=pd.Timestamp.today(), periods=days_sim, freq="B")
+            np.random.seed(abs(hash(selected_ticker)) % 9999)
+            rets = np.random.normal(0.0002, 0.010, days_sim)
+            px_s = base * np.exp(np.cumsum(rets) - np.cumsum(rets)[-1])
+            hist_df = pd.DataFrame({"Close": px_s, "Volume": np.random.randint(100000,2000000,days_sim).astype(float)}, index=dates_sim)
+    else:
+        hist_df, _ = get_stock_data(selected_ticker, "1y", "1d")
+
+    if hist_df is None or hist_df.empty or len(hist_df) < 30:
+        st.warning("Not enough historical data to generate a forecast. Try a different asset or time period.")
+    else:
+        close = hist_df["Close"].dropna().values
+        dates_hist = hist_df.index[-len(close):]
+
+        # ── CURRENT STATS ──
+        current_price = close[-1]
+        price_30d_ago = close[-min(30, len(close))]
+        momentum_30d  = ((current_price - price_30d_ago) / price_30d_ago) * 100
+        volatility_ann = close[-min(252,len(close)):].std() / close[-min(252,len(close)):].mean() * 100 * np.sqrt(252)
+
+        s1, s2, s3, s4 = st.columns(4)
+        with s1:
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Current Price</div><div class='metric-value' style='font-size:22px;'>{current_price:,.2f}</div></div>", unsafe_allow_html=True)
+        with s2:
+            mc = "#00d4aa" if momentum_30d >= 0 else "#ff4757"
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>30D Momentum</div><div class='metric-value' style='font-size:22px; color:{mc};'>{momentum_30d:+.1f}%</div></div>", unsafe_allow_html=True)
+        with s3:
+            vc = "#f0a500" if volatility_ann > 30 else "#00d4aa"
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Annualised Volatility</div><div class='metric-value' style='font-size:22px; color:{vc};'>{volatility_ann:.1f}%</div></div>", unsafe_allow_html=True)
+        with s4:
+            # Trend signal from last 20 days
+            ma20 = np.mean(close[-20:])
+            trend = "Bullish 🟢" if current_price > ma20 else "Bearish 🔴"
+            tc2 = "#00d4aa" if "Bullish" in trend else "#ff4757"
+            st.markdown(f"<div class='metric-card'><div class='metric-label'>Trend vs MA20</div><div class='metric-value' style='font-size:18px; color:{tc2};'>{trend}</div></div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── ML FORECAST ──
+        def ml_forecast(prices, n_forecast):
+            """Linear Regression on time index with lag features"""
+            n = len(prices)
+            # Features: time index + lag1 + lag2 + lag5 + rolling mean
+            X, y = [], []
+            for i in range(10, n):
+                X.append([
+                    i,                            # time index
+                    prices[i-1],                  # lag 1
+                    prices[i-2],                  # lag 2
+                    prices[i-5],                  # lag 5
+                    np.mean(prices[i-10:i]),       # 10-day rolling mean
+                    np.mean(prices[i-5:i]),        # 5-day rolling mean
+                ])
+                y.append(prices[i])
+            X, y = np.array(X), np.array(y)
+            scaler_X = MinMaxScaler()
+            scaler_y = MinMaxScaler()
+            X_s = scaler_X.fit_transform(X)
+            y_s = scaler_y.fit_transform(y.reshape(-1,1)).ravel()
+            model = LinearRegression()
+            model.fit(X_s, y_s)
+            # Forecast forward
+            forecast = []
+            last_prices = list(prices[-10:])
+            for step in range(n_forecast):
+                idx = n + step
+                feat = np.array([[
+                    idx,
+                    last_prices[-1],
+                    last_prices[-2],
+                    last_prices[-5] if len(last_prices) >= 5 else last_prices[0],
+                    np.mean(last_prices[-10:]),
+                    np.mean(last_prices[-5:]),
+                ]])
+                feat_s = scaler_X.transform(feat)
+                pred_s = model.predict(feat_s)
+                pred = scaler_y.inverse_transform(pred_s.reshape(-1,1))[0][0]
+                forecast.append(pred)
+                last_prices.append(pred)
+            return np.array(forecast)
+
+        # ── MA FORECAST ──
+        def ma_forecast(prices, n_forecast):
+            """Project trend using weighted moving average + momentum"""
+            ma10 = np.mean(prices[-10:])
+            ma20 = np.mean(prices[-20:])
+            ma50 = np.mean(prices[-min(50,len(prices)):])
+            # Daily drift from recent trend
+            recent = prices[-20:]
+            daily_returns = np.diff(recent) / recent[:-1]
+            mean_return = np.mean(daily_returns)
+            std_return  = np.std(daily_returns)
+            forecast = []
+            last = prices[-1]
+            for i in range(n_forecast):
+                # Decay toward MA20 with momentum
+                reversion = (ma20 - last) * 0.02
+                trend_push = last * mean_return
+                next_price = last + trend_push + reversion
+                forecast.append(next_price)
+                last = next_price
+            return np.array(forecast)
+
+        # ── RUN FORECASTS ──
+        ml_preds = ml_forecast(close, forecast_days) if "Machine Learning" in forecast_method or "Both" in forecast_method else None
+        ma_preds = ma_forecast(close, forecast_days) if "Moving Average" in forecast_method or "Both" in forecast_method else None
+
+        # ── BUILD FORECAST DATES ──
+        last_date = dates_hist[-1]
+        if hasattr(last_date, "tzinfo") and last_date.tzinfo:
+            forecast_dates = pd.bdate_range(start=last_date, periods=forecast_days+1, tz=last_date.tzinfo)[1:]
+        else:
+            forecast_dates = pd.bdate_range(start=last_date, periods=forecast_days+1)[1:]
+
+        # ── CHART ──
+        fig_fc = go.Figure()
+
+        # Historical price — last 90 days
+        show_n = min(90, len(close))
+        fig_fc.add_trace(go.Scatter(
+            x=dates_hist[-show_n:],
+            y=close[-show_n:],
+            name="Historical Price",
+            line=dict(color="#1b4fd8", width=2),
+            mode="lines"
+        ))
+
+        # Vertical divider at today
+        fig_fc.add_vline(x=str(dates_hist[-1])[:10], line_dash="dash",
+                          line_color="#8892a4", opacity=0.5, annotation_text="Today",
+                          annotation_font_color="#8892a4")
+
+        # ML forecast
+        if ml_preds is not None:
+            fig_fc.add_trace(go.Scatter(
+                x=forecast_dates, y=ml_preds,
+                name="ML Forecast (Linear Reg)",
+                line=dict(color="#00d4aa", width=2, dash="dash"),
+                mode="lines+markers",
+                marker=dict(size=4)
+            ))
+            if confidence_band:
+                vol_daily = np.std(np.diff(close[-60:]) / close[-61:-1]) if len(close) >= 61 else 0.015
+                upper = ml_preds * (1 + vol_daily * np.sqrt(np.arange(1, forecast_days+1)))
+                lower = ml_preds * (1 - vol_daily * np.sqrt(np.arange(1, forecast_days+1)))
+                fig_fc.add_trace(go.Scatter(
+                    x=list(forecast_dates) + list(forecast_dates[::-1]),
+                    y=list(upper) + list(lower[::-1]),
+                    fill="toself", fillcolor="rgba(0,212,170,0.08)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="ML Confidence Band", showlegend=True
+                ))
+
+        # MA forecast
+        if ma_preds is not None:
+            fig_fc.add_trace(go.Scatter(
+                x=forecast_dates, y=ma_preds,
+                name="MA Projection",
+                line=dict(color="#f0a500", width=2, dash="dot"),
+                mode="lines+markers",
+                marker=dict(size=4)
+            ))
+            if confidence_band:
+                vol_daily = np.std(np.diff(close[-60:]) / close[-61:-1]) if len(close) >= 61 else 0.015
+                upper_ma = ma_preds * (1 + vol_daily * 1.5 * np.sqrt(np.arange(1, forecast_days+1)))
+                lower_ma = ma_preds * (1 - vol_daily * 1.5 * np.sqrt(np.arange(1, forecast_days+1)))
+                fig_fc.add_trace(go.Scatter(
+                    x=list(forecast_dates) + list(forecast_dates[::-1]),
+                    y=list(upper_ma) + list(lower_ma[::-1]),
+                    fill="toself", fillcolor="rgba(240,165,0,0.06)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name="MA Confidence Band", showlegend=True
+                ))
+
+        fig_fc.update_layout(
+            title=dict(text=f"<b>{selected_name}</b> — {forecast_days}-Day Price Forecast", font=dict(color="white", size=16)),
+            paper_bgcolor="#0a0e1a", plot_bgcolor="#0d1220",
+            font=dict(color="#8892a4"),
+            legend=dict(bgcolor="rgba(20,25,40,0.8)", bordercolor="#2a3350", font=dict(color="white")),
+            height=500, margin=dict(t=50, b=20, l=10, r=10),
+            xaxis=dict(gridcolor="#1a2035", showgrid=True),
+            yaxis=dict(gridcolor="#1a2035", showgrid=True, title="Price"),
+            xaxis_rangeslider_visible=False,
+        )
+        st.plotly_chart(fig_fc, use_container_width=True)
+
+        # ── FORECAST SUMMARY TABLE ──
+        st.markdown("<div class='section-header'>📋 Forecast Summary</div>", unsafe_allow_html=True)
+
+        summary_rows = []
+        checkpoints = [7, 14, 30] if forecast_days >= 30 else [min(3, forecast_days), min(7, forecast_days), forecast_days]
+        checkpoints = sorted(set([c for c in checkpoints if c <= forecast_days] + [forecast_days]))
+
+        for cp in checkpoints:
+            idx = min(cp - 1, forecast_days - 1)
+            row = {"Horizon": f"{cp} days"}
+            if ml_preds is not None:
+                ml_p = ml_preds[idx]
+                ml_chg = ((ml_p - current_price) / current_price) * 100
+                row["ML Forecast"] = f"{ml_p:,.2f}"
+                row["ML Change"] = f"{ml_chg:+.2f}%"
+            if ma_preds is not None:
+                ma_p = ma_preds[idx]
+                ma_chg = ((ma_p - current_price) / current_price) * 100
+                row["MA Forecast"] = f"{ma_p:,.2f}"
+                row["MA Change"] = f"{ma_chg:+.2f}%"
+            # Consensus
+            preds = []
+            if ml_preds is not None: preds.append(ml_preds[idx])
+            if ma_preds is not None: preds.append(ma_preds[idx])
+            if preds:
+                avg = np.mean(preds)
+                avg_chg = ((avg - current_price) / current_price) * 100
+                row["Consensus"] = f"{avg:,.2f}"
+                row["Expected Move"] = f"{avg_chg:+.2f}%"
+                row["Signal"] = "🟢 Bullish" if avg_chg > 1 else "🔴 Bearish" if avg_chg < -1 else "🟡 Neutral"
+            summary_rows.append(row)
+
+        df_summary = pd.DataFrame(summary_rows)
+
+        def color_change(val):
+            if isinstance(val, str) and "%" in val:
+                try:
+                    num = float(val.replace("%","").replace("+",""))
+                    return f"color: {'#00d4aa' if num >= 0 else '#ff4757'}; font-weight: 600"
+                except: pass
+            return ""
+
+        chg_cols = [c for c in df_summary.columns if "Change" in c or "Move" in c]
+        st.dataframe(
+            df_summary.style.applymap(color_change, subset=chg_cols),
+            use_container_width=True, hide_index=True
+        )
+
+        # ── SUPPORT & RESISTANCE ──
+        st.markdown("<br><div class='section-header'>🎯 Key Price Levels</div>", unsafe_allow_html=True)
+        recent_90 = close[-min(90,len(close)):]
+        r1 = np.percentile(recent_90, 90)
+        r2 = np.percentile(recent_90, 75)
+        s1_lvl = np.percentile(recent_90, 25)
+        s2_lvl = np.percentile(recent_90, 10)
+        pivot  = (np.max(recent_90[-5:]) + np.min(recent_90[-5:]) + recent_90[-1]) / 3
+
+        lc1, lc2, lc3, lc4, lc5 = st.columns(5)
+        for col, label, val, clr in [
+            (lc1, "Resistance 2", r2,  "#ff4757"),
+            (lc2, "Resistance 1", r1,  "#ff9f43"),
+            (lc3, "Pivot Point",  pivot,"#8892a4"),
+            (lc4, "Support 1",    s1_lvl,"#00d4aa"),
+            (lc5, "Support 2",    s2_lvl,"#1b4fd8"),
+        ]:
+            diff = ((val - current_price) / current_price) * 100
+            col.markdown(f"""<div class='metric-card'>
+                <div class='metric-label'>{label}</div>
+                <div class='metric-value' style='font-size:20px; color:{clr};'>{val:,.2f}</div>
+                <div style='color:#8892a4; font-size:11px;'>{diff:+.1f}% from current</div>
+            </div>""", unsafe_allow_html=True)
+
+        # ── DISCLAIMER ──
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("""
+        <div style='background:rgba(240,165,0,0.08); border:1px solid rgba(240,165,0,0.3);
+             border-radius:8px; padding:12px 16px; font-size:12px; color:#f0a500;'>
+            ⚠️ <strong>Disclaimer:</strong> These forecasts are generated using statistical models (Linear Regression & Moving Average Projection)
+            and are for informational purposes only. Past price patterns do not guarantee future results.
+            Financial markets are inherently unpredictable. Do not make investment decisions based solely on these projections.
+            Always conduct your own research and consult a qualified financial advisor.
+        </div>
+        """, unsafe_allow_html=True)
+
 
 # ── FOOTER ──
 st.markdown("<br>", unsafe_allow_html=True)
