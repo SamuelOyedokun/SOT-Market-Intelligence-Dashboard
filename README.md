@@ -1,6 +1,6 @@
 # 📈 SOT Market Intelligence Dashboard
 
-> **Real-time market intelligence for US Stocks, Crypto, NGX, and Commodities — powered by AI, built for serious investors.**
+> **Real-time market intelligence for US Stocks, Crypto, NGX, and Commodities**
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://sot-market-intelligence-dashboard.streamlit.app)
 [![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://python.org)
