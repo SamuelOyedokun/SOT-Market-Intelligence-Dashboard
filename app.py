@@ -1339,7 +1339,7 @@ with tab4:
 # ── TAB 5: AI MARKET INSIGHTS ──
 with tab5:
     st.markdown("<div class='section-header'>🤖 AI Market Insights</div>", unsafe_allow_html=True)
-    st.markdown("<small style='color:#8892a4;'>Powered by Groq AI (LLaMA 3.3 70B) · Analysis is for informational purposes only, not financial advice</small>", unsafe_allow_html=True)
+    st.markdown("<small style='color:#8892a4;'>Analysis is for informational purposes only, not financial advice</small>", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
     # AI analysis type selector
@@ -2082,7 +2082,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("""
 <div style='text-align:center; padding:20px; border-top:1px solid #2a3350; color:#8892a4; font-size:12px;'>
     Built by <strong style='color:#1b4fd8;'>Samuel Oyedokun</strong> · 
-    Data via Yahoo Finance · 
     <a href='https://github.com/SamuelOyedokun' style='color:#1b4fd8;'>GitHub</a> · 
     <a href='https://www.linkedin.com/in/samuel-oyedokun-b41895142' style='color:#1b4fd8;'>LinkedIn</a>
 </div>
