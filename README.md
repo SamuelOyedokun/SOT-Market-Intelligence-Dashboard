@@ -76,7 +76,7 @@ SOT Market Intelligence is a production-grade financial analytics platform that 
 |---|---|---|
 | 🇺🇸 US Stocks | Apple, Microsoft, Google, Amazon, Tesla, NVIDIA, Meta, Netflix, JPMorgan, Coca-Cola | Yahoo Finance |
 | ₿ Crypto | Bitcoin, Ethereum, BNB, Solana, XRP, Cardano, Dogecoin, Polkadot | Yahoo Finance |
-| 🇳🇬 NGX Stocks | GTBank, Zenith Bank, MTN Nigeria, Dangote Cement, Access Bank, UBA, FBN Holdings, Stanbic IBTC, and more | iTick API + Web Scraping |
+| 🇳🇬 NGX Stocks | GTBank, Zenith Bank, MTN Nigeria, Dangote Cement, Access Bank, UBA, FBN Holdings, Stanbic IBTC, and more | iTick API |
 | 🛢 Commodities | Gold, Silver, Crude Oil (WTI), Brent Crude, Natural Gas, Copper, Platinum, Corn, Wheat, Coffee | Yahoo Finance |
 
 ---
