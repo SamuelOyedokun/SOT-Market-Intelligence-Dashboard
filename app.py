@@ -9,12 +9,14 @@ import requests
 import json
 from datetime import datetime, timedelta
 import time
-# ── GROQ AI CONFIG (Free) ──
+# ── AI CONFIG — Groq primary, OpenRouter fallback ──
 try:
-    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY")
+    GROQ_API_KEY      = st.secrets.get("GROQ_API_KEY", "")
+    OPENROUTER_API_KEY= st.secrets.get("OPENROUTER_API_KEY", "")
 except:
     import os
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 import smtplib
 from email.mime.text import MIMEText
@@ -1495,36 +1497,52 @@ Note: This is for informational purposes only, not financial advice.""",
                     st.error("⚠️ Groq API key not configured. Add GROQ_API_KEY to your Streamlit secrets.")
                     st.stop()
 
-                response = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {GROQ_API_KEY}",
-                    },
-                    json={
-                        "model": "llama-3.3-70b-versatile",
-                        "max_tokens": 1000,
-                        "temperature": 0.7,
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "You are a professional financial analyst and market strategist with deep expertise in global markets including Nigerian stocks (NGX), US equities, cryptocurrencies, and commodities. Provide clear, data-driven, professional analysis."
-                            },
-                            {"role": "user", "content": selected_prompt}
-                        ]
-                    },
-                    timeout=30
-                )
-                data = response.json()
+                # Try Groq first, fall back to OpenRouter if restricted
                 ai_text = ""
-                if "choices" in data:
-                    ai_text = data["choices"][0].get("message", {}).get("content", "")
+                system_msg = "You are a professional financial analyst and market strategist with deep expertise in global markets including Nigerian stocks (NGX), US equities, cryptocurrencies, and commodities. Provide clear, data-driven, professional analysis."
 
-                if not ai_text and "error" in data:
-                    err = data.get("error", {})
-                    st.error(f"Groq API Error: {err.get('message', 'Unknown error')}")
-                elif not ai_text:
-                    st.error(f"Empty response. Please try again.")
+                def _try_groq():
+                    if not GROQ_API_KEY: return None
+                    r = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Content-Type":"application/json","Authorization":f"Bearer {GROQ_API_KEY}"},
+                        json={"model":"llama-3.3-70b-versatile","max_tokens":1000,"temperature":0.7,
+                              "messages":[{"role":"system","content":system_msg},{"role":"user","content":selected_prompt}]},
+                        timeout=30
+                    )
+                    d = r.json()
+                    if "choices" in d: return d["choices"][0].get("message",{}).get("content","")
+                    if "error" in d:
+                        msg = d["error"].get("message","")
+                        if "restricted" in msg.lower() or "organization" in msg.lower(): return "RESTRICTED"
+                    return None
+
+                def _try_openrouter():
+                    if not OPENROUTER_API_KEY: return None
+                    r = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Content-Type":"application/json","Authorization":f"Bearer {OPENROUTER_API_KEY}",
+                                 "HTTP-Referer":"https://sot-market-intelligence.streamlit.app","X-Title":"SOT Market Intelligence"},
+                        json={"model":"meta-llama/llama-3.3-70b-instruct:free","max_tokens":1000,"temperature":0.7,
+                              "messages":[{"role":"system","content":system_msg},{"role":"user","content":selected_prompt}]},
+                        timeout=30
+                    )
+                    d = r.json()
+                    if "choices" in d: return d["choices"][0].get("message",{}).get("content","")
+                    return None
+
+                # Try Groq
+                result = _try_groq()
+                if result == "RESTRICTED" or not result:
+                    # Fall back to OpenRouter
+                    result = _try_openrouter()
+                    if result:
+                        ai_text = result
+                        st.caption("🔄 Using OpenRouter (Groq unavailable)")
+                    else:
+                        st.error("All AI providers unavailable. Add OPENROUTER_API_KEY to Streamlit secrets as backup.")
+                else:
+                    ai_text = result
 
                 if ai_text:
                     # Display AI response in styled card
@@ -1718,13 +1736,14 @@ with tab6:
 
 # ── TAB 7: MARKET FORECAST ──
 with tab7:
+    import re as _re2
     try:
         from sklearn.linear_model import LinearRegression
         from sklearn.preprocessing import MinMaxScaler
         sklearn_available = True
     except ImportError:
         sklearn_available = False
-        st.warning("scikit-learn not installed. ML forecasting unavailable. MA forecasting still works.")
+        st.info("scikit-learn not installed. Only MA forecasting available.")
 
     st.markdown("<div class='section-header'>🔮 Market Forecast</div>", unsafe_allow_html=True)
     st.markdown("<small style='color:#8892a4;'>Price forecasting using Machine Learning & Moving Average Projection · For informational purposes only · Not financial advice</small>", unsafe_allow_html=True)
@@ -1862,23 +1881,36 @@ with tab7:
             return np.array(forecast)
 
         # ── RUN FORECASTS ──
-        ml_preds = ml_forecast(close, forecast_days) if "Machine Learning" in forecast_method or "Both" in forecast_method else None
-        ma_preds = ma_forecast(close, forecast_days) if "Moving Average" in forecast_method or "Both" in forecast_method else None
+        with st.spinner("🔮 Generating forecast..."):
+            try:
+                ml_preds = ml_forecast(close, forecast_days) if sklearn_available and ("Machine Learning" in forecast_method or "Both" in forecast_method) else None
+            except Exception as _ml_e:
+                st.warning(f"ML forecast error: {_ml_e}")
+                ml_preds = None
+            try:
+                ma_preds = ma_forecast(close, forecast_days) if "Moving Average" in forecast_method or "Both" in forecast_method else None
+            except Exception as _ma_e:
+                st.warning(f"MA forecast error: {_ma_e}")
+                ma_preds = None
 
         # ── BUILD FORECAST DATES ──
-        last_date = dates_hist[-1]
-        if hasattr(last_date, "tzinfo") and last_date.tzinfo:
-            forecast_dates = pd.bdate_range(start=last_date, periods=forecast_days+1, tz=last_date.tzinfo)[1:]
-        else:
-            forecast_dates = pd.bdate_range(start=last_date, periods=forecast_days+1)[1:]
+        try:
+            last_date = pd.Timestamp(dates_hist[-1]).tz_localize(None)  # strip timezone
+        except:
+            last_date = pd.Timestamp.today()
+        forecast_dates = pd.bdate_range(start=last_date, periods=forecast_days+1)[1:]
 
         # ── CHART ──
         fig_fc = go.Figure()
 
-        # Historical price — last 90 days
+        # Historical price — last 90 days — strip timezone for Plotly compatibility
         show_n = min(90, len(close))
+        try:
+            dates_plot = [pd.Timestamp(d).tz_localize(None) for d in dates_hist[-show_n:]]
+        except:
+            dates_plot = list(dates_hist[-show_n:])
         fig_fc.add_trace(go.Scatter(
-            x=dates_hist[-show_n:],
+            x=dates_plot,
             y=close[-show_n:],
             name="Historical Price",
             line=dict(color="#1b4fd8", width=2),
@@ -1887,7 +1919,7 @@ with tab7:
 
         # Vertical divider at today
         # Add "Today" marker as a shape instead of vline (Plotly compatibility fix)
-        today_x = str(dates_hist[-1])[:10]
+        today_x = str(pd.Timestamp(dates_hist[-1]).tz_localize(None) if hasattr(pd.Timestamp(dates_hist[-1]), 'tzinfo') and pd.Timestamp(dates_hist[-1]).tzinfo else dates_hist[-1])[:10]
         fig_fc.add_shape(type="line",
             x0=today_x, x1=today_x, y0=0, y1=1,
             xref="x", yref="paper",
@@ -1953,7 +1985,10 @@ with tab7:
             yaxis=dict(gridcolor="#1a2035", showgrid=True, title="Price"),
             xaxis_rangeslider_visible=False,
         )
-        st.plotly_chart(fig_fc, use_container_width=True)
+        try:
+            st.plotly_chart(fig_fc, use_container_width=True)
+        except Exception as _chart_e:
+            st.error(f"Chart error: {_chart_e}")
 
         # ── FORECAST SUMMARY TABLE ──
         st.markdown("<div class='section-header'>📋 Forecast Summary</div>", unsafe_allow_html=True)
