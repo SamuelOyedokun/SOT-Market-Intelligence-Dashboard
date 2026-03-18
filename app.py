@@ -693,7 +693,7 @@ st.markdown("""
     <div style='background:linear-gradient(135deg,#1b4fd8,#0d2d9e); border-radius:10px; padding:10px 14px; font-size:22px;'>📈</div>
     <div>
         <div style='font-size:24px; font-weight:700; color:white;'>SOT Market Intelligence Dashboard</div>
-        <div style='font-size:13px; color:#8892a4;'>Real-time tracking · US Stocks · Crypto · NGX · Commodities · Built by Samuel Oyedokun</div>
+        <div style='font-size:13px; color:#8892a4;'>Real-time tracking · US Stocks · Crypto · NGX · Commodities</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -2081,7 +2081,7 @@ with tab7:
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("""
 <div style='text-align:center; padding:20px; border-top:1px solid #2a3350; color:#8892a4; font-size:12px;'>
-    Built by <strong style='color:#1b4fd8;'>Samuel Oyedokun</strong> · 
+    Built by <strong style='color:#1b4fd8;'>Samuel Oyedokun</strong> ·  
     <a href='https://github.com/SamuelOyedokun' style='color:#1b4fd8;'>GitHub</a> · 
     <a href='https://www.linkedin.com/in/samuel-oyedokun-b41895142' style='color:#1b4fd8;'>LinkedIn</a>
 </div>
