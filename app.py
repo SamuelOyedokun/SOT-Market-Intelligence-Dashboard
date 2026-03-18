@@ -1502,10 +1502,15 @@ Note: This is for informational purposes only, not financial advice.""",
                     providers.append(("Groq", "https://api.groq.com/openai/v1/chat/completions",
                                       GROQ_API_KEY, "llama-3.3-70b-versatile", {}))
                 if OPENROUTER_API_KEY:
-                    providers.append(("OpenRouter", "https://openrouter.ai/api/v1/chat/completions",
-                                      OPENROUTER_API_KEY, "meta-llama/llama-3.3-70b-instruct:free",
-                                      {"HTTP-Referer":"https://sot-market-intelligence.streamlit.app",
-                                       "X-Title":"SOT Market Intelligence"}))
+                    or_headers = {"HTTP-Referer":"https://sot-market-intelligence.streamlit.app",
+                                  "X-Title":"SOT Market Intelligence"}
+                    # Try openrouter/free first (auto-picks working free model), then specific models
+                    for or_model in ["openrouter/auto",
+                                     "meta-llama/llama-3.3-70b-instruct:free",
+                                     "deepseek/deepseek-r1:free",
+                                     "google/gemma-3-27b-it:free"]:
+                        providers.append(("OpenRouter", "https://openrouter.ai/api/v1/chat/completions",
+                                          OPENROUTER_API_KEY, or_model, or_headers))
 
                 if not providers:
                     st.error("No AI API key configured. Add GROQ_API_KEY or OPENROUTER_API_KEY to Streamlit secrets.")
