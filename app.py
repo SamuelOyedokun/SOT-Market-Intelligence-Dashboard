@@ -1493,56 +1493,49 @@ Note: This is for informational purposes only, not financial advice.""",
 
         with st.spinner("🤖 AI is analyzing the market data..."):
             try:
-                if not GROQ_API_KEY:
-                    st.error("⚠️ Groq API key not configured. Add GROQ_API_KEY to your Streamlit secrets.")
-                    st.stop()
-
-                # Try Groq first, fall back to OpenRouter if restricted
                 ai_text = ""
                 system_msg = "You are a professional financial analyst and market strategist with deep expertise in global markets including Nigerian stocks (NGX), US equities, cryptocurrencies, and commodities. Provide clear, data-driven, professional analysis."
 
-                def _try_groq():
-                    if not GROQ_API_KEY: return None
-                    r = requests.post(
-                        "https://api.groq.com/openai/v1/chat/completions",
-                        headers={"Content-Type":"application/json","Authorization":f"Bearer {GROQ_API_KEY}"},
-                        json={"model":"llama-3.3-70b-versatile","max_tokens":1000,"temperature":0.7,
-                              "messages":[{"role":"system","content":system_msg},{"role":"user","content":selected_prompt}]},
-                        timeout=30
-                    )
-                    d = r.json()
-                    if "choices" in d: return d["choices"][0].get("message",{}).get("content","")
-                    if "error" in d:
-                        msg = d["error"].get("message","")
-                        if "restricted" in msg.lower() or "organization" in msg.lower(): return "RESTRICTED"
-                    return None
+                # Try each provider in order
+                providers = []
+                if GROQ_API_KEY:
+                    providers.append(("Groq", "https://api.groq.com/openai/v1/chat/completions",
+                                      GROQ_API_KEY, "llama-3.3-70b-versatile", {}))
+                if OPENROUTER_API_KEY:
+                    providers.append(("OpenRouter", "https://openrouter.ai/api/v1/chat/completions",
+                                      OPENROUTER_API_KEY, "meta-llama/llama-3.3-70b-instruct:free",
+                                      {"HTTP-Referer":"https://sot-market-intelligence.streamlit.app",
+                                       "X-Title":"SOT Market Intelligence"}))
 
-                def _try_openrouter():
-                    if not OPENROUTER_API_KEY: return None
-                    r = requests.post(
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        headers={"Content-Type":"application/json","Authorization":f"Bearer {OPENROUTER_API_KEY}",
-                                 "HTTP-Referer":"https://sot-market-intelligence.streamlit.app","X-Title":"SOT Market Intelligence"},
-                        json={"model":"meta-llama/llama-3.3-70b-instruct:free","max_tokens":1000,"temperature":0.7,
-                              "messages":[{"role":"system","content":system_msg},{"role":"user","content":selected_prompt}]},
-                        timeout=30
-                    )
-                    d = r.json()
-                    if "choices" in d: return d["choices"][0].get("message",{}).get("content","")
-                    return None
-
-                # Try Groq
-                result = _try_groq()
-                if result == "RESTRICTED" or not result:
-                    # Fall back to OpenRouter
-                    result = _try_openrouter()
-                    if result:
-                        ai_text = result
-                        st.caption("🔄 Using OpenRouter (Groq unavailable)")
-                    else:
-                        st.error("All AI providers unavailable. Add OPENROUTER_API_KEY to Streamlit secrets as backup.")
+                if not providers:
+                    st.error("No AI API key configured. Add GROQ_API_KEY or OPENROUTER_API_KEY to Streamlit secrets.")
                 else:
-                    ai_text = result
+                    last_error = ""
+                    for provider_name, url, key, model, extra_headers in providers:
+                        try:
+                            hdrs = {"Content-Type":"application/json",
+                                    "Authorization":f"Bearer {key}", **extra_headers}
+                            resp = requests.post(url, headers=hdrs,
+                                json={"model":model,"max_tokens":1000,"temperature":0.7,
+                                      "messages":[{"role":"system","content":system_msg},
+                                                  {"role":"user","content":selected_prompt}]},
+                                timeout=30)
+                            d = resp.json()
+                            if "choices" in d:
+                                txt = d["choices"][0].get("message",{}).get("content","")
+                                if txt:
+                                    ai_text = txt
+                                    if provider_name != "Groq":
+                                        st.caption(f"🔄 Powered by {provider_name}")
+                                    break
+                            elif "error" in d:
+                                last_error = d["error"].get("message","Unknown error")
+                        except Exception as _pe:
+                            last_error = str(_pe)
+                            continue
+
+                    if not ai_text and last_error:
+                        st.error(f"AI error: {last_error}")
 
                 if ai_text:
                     # Display AI response in styled card
