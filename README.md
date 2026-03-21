@@ -10,7 +10,7 @@
 
 ## 🌍 Live Demo
 
-**[→ Launch Dashboard](https://sot-market-intelligence-dashboard.streamlit.app)**
+**[→ Launch Dashboard](https://sot-market-intelligence-dashboard-k9q2a5s8uh6r2oe4gqztwb.streamlit.app/)**
 
 ---
 
